@@ -45,18 +45,18 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 <div class="header"><div class="header-left">
 <h1>De-Lever Signal Dashboard <span>/ NDX</span></h1>
 <p>5 bottom confirmation signals &middot; auto-updated every hour</p></div>
-<div class="header-right"><div class="timestamp">Last updated: 2026-06-23 15:52 UTC</div></div></div>
+<div class="header-right"><div class="timestamp">Last updated: 2026-06-23 18:01 UTC</div></div></div>
 <div class="signal-bar">
 <div class="signal-card green">
 <div class="signal-label">&#9312; VIX Term Structure</div>
-<div class="signal-value green">+1.54 pts</div>
-<div class="signal-sub">VIX9D 19.8 &rarr; VIX 19.6 &rarr; VIX3M 21.2</div>
+<div class="signal-value green">+1.96 pts</div>
+<div class="signal-sub">VIX9D 18.2 &rarr; VIX 18.7 &rarr; VIX3M 20.7</div>
 <div class="signal-badge badge-green">CONTANGO ✅</div></div>
-<div class="signal-card red">
+<div class="signal-card yellow">
 <div class="signal-label">&#9313; Crypto Funding (Binance)</div>
-<div class="signal-value red">BTC -0.2178%</div>
-<div class="signal-sub">ETH -0.4375% &middot; OKX BTC +0.0025%</div>
-<div class="signal-badge badge-red">BOTH NEGATIVE ⚠️ — Still de-risking</div></div>
+<div class="signal-value green">BTC +0.1202%</div>
+<div class="signal-sub">ETH -0.1861% &middot; OKX BTC +0.0036%</div>
+<div class="signal-badge badge-yellow">MIXED ⚠️ — Partial recovery</div></div>
 <div class="signal-card green">
 <div class="signal-label">&#9314; CTA Proxy (CFTC COT)</div>
 <div class="signal-value green">-51,468</div>
@@ -64,14 +64,14 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 <div class="signal-badge badge-green">SHORT COVERING ✅</div></div>
 <div class="signal-card yellow">
 <div class="signal-label">&#9315; Cross-Sector Correlation</div>
-<div class="signal-value yellow">0.269</div>
-<div class="signal-sub">2W vs 1M avg: 0.185 &rarr; 0.269</div>
+<div class="signal-value yellow">0.264</div>
+<div class="signal-sub">2W vs 1M avg: 0.184 &rarr; 0.264</div>
 <div class="signal-badge badge-yellow">ELEVATED ⚠️</div></div>
 </div>
 <div class="confirm-counter">
 <div class="confirm-label">Signals confirmed</div>
-<div class="confirm-dots"><div class="dot filled" title="VIX Contango"></div><div class="dot empty" title="BTC FR+"></div><div class="dot empty" title="ETH FR+"></div><div class="dot filled" title="CTA Covering"></div><div class="dot empty" title="Corr Declining"></div></div>
-<div class="confirm-text"><strong>2/5</strong> &mdash; <span style="color:#f59e0b">Watch closely — de-lever may be abating</span></div>
+<div class="confirm-dots"><div class="dot filled" title="VIX Contango"></div><div class="dot filled" title="BTC FR+"></div><div class="dot empty" title="ETH FR+"></div><div class="dot filled" title="CTA Covering"></div><div class="dot empty" title="Corr Declining"></div></div>
+<div class="confirm-text"><strong>3/5</strong> &mdash; <span style="color:#10b981">Threshold reached: mechanical selling likely exhausting</span></div>
 </div>
 <div class="charts-grid">
 <div class="chart-card"><div class="chart-title">VIX 30-Day History</div>
@@ -99,23 +99,23 @@ var T={paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",
   margin:{l:40,r:8,t:8,b:40},showlegend:false,height:190,autosize:true};
 var CFG={responsive:true,displayModeBar:false};
 var vixShape={type:"line",x0:0,x1:1,xref:"paper",y0:20,y1:20,line:{color:"#ef4444",width:1,dash:"dot"}};
-Plotly.newPlot("chart-vix",[{x:["2026-05-13", "2026-05-14", "2026-05-15", "2026-05-18", "2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22", "2026-05-25", "2026-05-26", "2026-05-27", "2026-05-28", "2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23"],y:[17.87, 17.26, 18.43, 17.82, 18.06, 17.44, 16.76, 16.7, 16.59, 17.01, 16.29, 15.74, 15.32, 16.05, 15.77, 16.06, 15.4, 21.51, 18.92, 19.87, 22.22, 19.44, 17.68, 16.2, 16.41, 18.44, 16.4, 17.28, 19.65],type:"scatter",mode:"lines",
+Plotly.newPlot("chart-vix",[{x:["2026-05-13", "2026-05-14", "2026-05-15", "2026-05-18", "2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22", "2026-05-25", "2026-05-26", "2026-05-27", "2026-05-28", "2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23"],y:[17.87, 17.26, 18.43, 17.82, 18.06, 17.44, 16.76, 16.7, 16.59, 17.01, 16.29, 15.74, 15.32, 16.05, 15.77, 16.06, 15.4, 21.51, 18.92, 19.87, 22.22, 19.44, 17.68, 16.2, 16.41, 18.44, 16.4, 17.28, 18.7],type:"scatter",mode:"lines",
   line:{color:"#f59e0b",width:2},fill:"tozeroy",fillcolor:"rgba(245,158,11,0.07)"}],
   Object.assign({},T,{shapes:[vixShape]}),CFG);
-Plotly.newPlot("chart-vix-term",[{x:["VIX9D","VIX spot","VIX3M"],y:[19.8,19.65,21.19],
+Plotly.newPlot("chart-vix-term",[{x:["VIX9D","VIX spot","VIX3M"],y:[18.17,18.7,20.66],
   type:"bar",marker:{color:["#ef4444","#f59e0b","#10b981"],line:{width:0}},
-  text:["19.8","19.65","21.19"],textposition:"outside",textfont:{color:"#e2e8f0",size:12},
+  text:["18.17","18.7","20.66"],textposition:"outside",textfont:{color:"#e2e8f0",size:12},
   width:[0.5,0.5,0.5]}],
   {paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",font:{color:"#94a3b8",size:10},
    xaxis:{type:"category",gridcolor:"#1e2433",tickfont:{size:11,color:"#94a3b8"},fixedrange:true},
-   yaxis:{gridcolor:"#1e2433",tickfont:{size:9},range:[0,26.49],automargin:true,fixedrange:true},
+   yaxis:{gridcolor:"#1e2433",tickfont:{size:9},range:[0,25.82],automargin:true,fixedrange:true},
    margin:{l:30,r:8,t:28,b:36},showlegend:false,height:190,autosize:true},CFG);
 var cotColors=[-32581, -33944, -41041, -42626, -41577, -45034, -58892, -54238, -55663, -56339, -73737, -65822, -70676, -74838, -56754, -51468].map(function(v){return v>=0?"#10b981":"#ef4444";});
 var zeroLine={type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}};
 Plotly.newPlot("chart-cot",[{x:["2026-03-03", "2026-03-10", "2026-03-17", "2026-03-24", "2026-03-31", "2026-04-07", "2026-04-14", "2026-04-21", "2026-04-28", "2026-05-05", "2026-05-12", "2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09", "2026-06-16"],y:[-32581, -33944, -41041, -42626, -41577, -45034, -58892, -54238, -55663, -56339, -73737, -65822, -70676, -74838, -56754, -51468],type:"bar",marker:{color:cotColors}}],
   Object.assign({},T,{shapes:[zeroLine],xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);
 Plotly.newPlot("chart-corr",[
-  {x:["2026-05-22", "2026-05-26", "2026-05-27", "2026-05-28", "2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23"],y:[0.249, 0.2478, 0.2416, 0.2439, 0.2447, 0.1834, 0.1665, 0.1532, 0.1565, 0.1575, 0.141, 0.1548, 0.1513, 0.162, 0.1756, 0.1721, 0.1401, 0.1985, 0.2042, 0.1934, 0.1848],type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"},
+  {x:["2026-05-22", "2026-05-26", "2026-05-27", "2026-05-28", "2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23"],y:[0.249, 0.2478, 0.2416, 0.2439, 0.2447, 0.1834, 0.1665, 0.1532, 0.1565, 0.1575, 0.141, 0.1548, 0.1513, 0.162, 0.1756, 0.1721, 0.1401, 0.1985, 0.2042, 0.1934, 0.1838],type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"},
   {x:["2026-05-22", "2026-05-26", "2026-05-27", "2026-05-28", "2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23"],y:[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],type:"scatter",mode:"lines",line:{color:"#ef4444",width:1,dash:"dash"}}
 ],Object.assign({},T,{showlegend:false}),CFG);
 window.addEventListener("resize",function(){
