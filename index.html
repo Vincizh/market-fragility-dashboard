@@ -45,17 +45,17 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 <div class="header"><div class="header-left">
 <h1>De-Lever Signal Dashboard <span>/ NDX</span></h1>
 <p>5 bottom confirmation signals &middot; auto-updated every hour</p></div>
-<div class="header-right"><div class="timestamp">Last updated: 2026-07-07 17:19 UTC</div></div></div>
+<div class="header-right"><div class="timestamp">Last updated: 2026-07-07 20:00 UTC</div></div></div>
 <div class="signal-bar">
 <div class="signal-card green">
 <div class="signal-label">&#9312; VIX Term Structure</div>
-<div class="signal-value green">+3.04 pts</div>
-<div class="signal-sub">VIX9D 12.8 &rarr; VIX 15.7 &rarr; VIX3M 18.8</div>
+<div class="signal-value green">+2.82 pts</div>
+<div class="signal-sub">VIX9D 13.6 &rarr; VIX 16.3 &rarr; VIX3M 19.1</div>
 <div class="signal-badge badge-green">CONTANGO ✅</div></div>
 <div class="signal-card green">
 <div class="signal-label">&#9313; Crypto Funding (Binance)</div>
-<div class="signal-value green">BTC +0.7994%</div>
-<div class="signal-sub">ETH +0.5671% &middot; OKX BTC +0.0069%</div>
+<div class="signal-value green">BTC +0.9780%</div>
+<div class="signal-sub">ETH +0.4126% &middot; OKX BTC +0.0068%</div>
 <div class="signal-badge badge-green">BOTH POSITIVE ✅ — Risk appetite returning</div></div>
 <div class="signal-card red">
 <div class="signal-label">&#9314; CTA Proxy (CFTC COT)</div>
@@ -64,8 +64,8 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 <div class="signal-badge badge-red">ADDING SHORTS ⚠️</div></div>
 <div class="signal-card green">
 <div class="signal-label">&#9315; Cross-Sector Correlation</div>
-<div class="signal-value green">-0.000</div>
-<div class="signal-sub">2W vs 1M avg: 0.141 &rarr; -0.000</div>
+<div class="signal-value green">-0.003</div>
+<div class="signal-sub">2W vs 1M avg: 0.143 &rarr; -0.003</div>
 <div class="signal-badge badge-green">DECLINING ✅</div></div>
 </div>
 <div class="confirm-counter">
@@ -99,24 +99,24 @@ var T={paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",
   margin:{l:40,r:8,t:8,b:40},showlegend:false,height:190,autosize:true};
 var CFG={responsive:true,displayModeBar:false};
 var vixShape={type:"line",x0:0,x1:1,xref:"paper",y0:20,y1:20,line:{color:"#ef4444",width:1,dash:"dot"}};
-Plotly.newPlot("chart-vix",[{x:["2026-05-27", "2026-05-28", "2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07"],y:[16.29, 15.74, 15.32, 16.05, 15.77, 16.06, 15.4, 21.51, 18.92, 19.87, 22.22, 19.44, 17.68, 16.2, 16.41, 18.44, 16.4, 17.28, 19.49, 18.63, 18.89, 18.41, 17.65, 16.45, 16.59, 16.15, 15.57, 15.71],type:"scatter",mode:"lines",
+Plotly.newPlot("chart-vix",[{x:["2026-05-27", "2026-05-28", "2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07"],y:[16.29, 15.74, 15.32, 16.05, 15.77, 16.06, 15.4, 21.51, 18.92, 19.87, 22.22, 19.44, 17.68, 16.2, 16.41, 18.44, 16.4, 17.28, 19.49, 18.63, 18.89, 18.41, 17.65, 16.45, 16.59, 16.15, 15.57, 16.32],type:"scatter",mode:"lines",
   line:{color:"#f59e0b",width:2},fill:"tozeroy",fillcolor:"rgba(245,158,11,0.07)"}],
   Object.assign({},T,{shapes:[vixShape]}),CFG);
-Plotly.newPlot("chart-vix-term",[{x:["VIX9D","VIX spot","VIX3M"],y:[12.76,15.71,18.75],
+Plotly.newPlot("chart-vix-term",[{x:["VIX9D","VIX spot","VIX3M"],y:[13.63,16.32,19.14],
   type:"bar",marker:{color:["#ef4444","#f59e0b","#10b981"],line:{width:0}},
-  text:["12.76","15.71","18.75"],textposition:"outside",textfont:{color:"#e2e8f0",size:12},
+  text:["13.63","16.32","19.14"],textposition:"outside",textfont:{color:"#e2e8f0",size:12},
   width:[0.5,0.5,0.5]}],
   {paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",font:{color:"#94a3b8",size:10},
    xaxis:{type:"category",gridcolor:"#1e2433",tickfont:{size:11,color:"#94a3b8"},fixedrange:true},
-   yaxis:{gridcolor:"#1e2433",tickfont:{size:9},range:[0,23.44],automargin:true,fixedrange:true},
+   yaxis:{gridcolor:"#1e2433",tickfont:{size:9},range:[0,23.92],automargin:true,fixedrange:true},
    margin:{l:30,r:8,t:28,b:36},showlegend:false,height:190,autosize:true},CFG);
 var cotColors=[-41041, -42626, -41577, -45034, -58892, -54238, -55663, -56339, -73737, -65822, -70676, -74838, -56754, -51468, -57403, -79944].map(function(v){return v>=0?"#10b981":"#ef4444";});
 var zeroLine={type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}};
 Plotly.newPlot("chart-cot",[{x:["2026-03-17", "2026-03-24", "2026-03-31", "2026-04-07", "2026-04-14", "2026-04-21", "2026-04-28", "2026-05-05", "2026-05-12", "2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09", "2026-06-16", "2026-06-23", "2026-06-30"],y:[-41041, -42626, -41577, -45034, -58892, -54238, -55663, -56339, -73737, -65822, -70676, -74838, -56754, -51468, -57403, -79944],type:"bar",marker:{color:cotColors}}],
   Object.assign({},T,{shapes:[zeroLine],xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);
 Plotly.newPlot("chart-corr",[
-  {x:["2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07"],y:[0.141, 0.1548, 0.1513, 0.162, 0.1756, 0.1721, 0.1401, 0.1985, 0.2042, 0.1934, 0.1785, 0.171, 0.1702, 0.1688, 0.1604, 0.1527, 0.1375, 0.1575, 0.1541, 0.1411],type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"},
-  {x:["2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07"],y:[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],type:"scatter",mode:"lines",line:{color:"#ef4444",width:1,dash:"dash"}}
+  {x:["2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07"],y:[0.1548, 0.1513, 0.162, 0.1756, 0.1721, 0.1401, 0.1985, 0.2042, 0.1934, 0.1785, 0.171, 0.1702, 0.1688, 0.1604, 0.1527, 0.1375, 0.1575, 0.1541, 0.143],type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"},
+  {x:["2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07"],y:[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],type:"scatter",mode:"lines",line:{color:"#ef4444",width:1,dash:"dash"}}
 ],Object.assign({},T,{showlegend:false}),CFG);
 window.addEventListener("resize",function(){
   ["chart-vix","chart-vix-term","chart-cot","chart-corr"].forEach(function(id){Plotly.Plots.resize(document.getElementById(id));});
