@@ -1313,7 +1313,12 @@ def build_takeaway():
         tag = "positive / dampening" if dg_positive else "negative / amplifying"
         if hgex_spy_has and spy_res.get("flip") and spy_res.get("spot"):
             fp = (spy_res["flip"] - spy_res["spot"]) / spy_res["spot"] * 100.0
-            bits3.append("dealer gamma {} via {} (flip {:+.1f}% vs spot)".format(tag, dg_source, fp))
+            flip_clause = "flip {:+.1f}% vs spot".format(fp)
+            if dg_source.endswith(")"):
+                src = dg_source[:-1] + ", " + flip_clause + ")"
+            else:
+                src = dg_source + " (" + flip_clause + ")"
+            bits3.append("dealer gamma {} via {}".format(tag, src))
         else:
             bits3.append("dealer gamma {} via {}".format(tag, dg_source))
     else:
@@ -1858,7 +1863,7 @@ parts.append('  var hgShapes=[{type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line
 parts.append('  if(hgSpot!==null){hgShapes.push({type:"line",x0:hgSpot,x1:hgSpot,yref:"paper",y0:0,y1:1,line:{color:"#e2e8f0",width:1,dash:"dash"}});}')
 parts.append('  if(hgFlip!==null){hgShapes.push({type:"line",x0:hgFlip,x1:hgFlip,yref:"paper",y0:0,y1:1,line:{color:"#6366f1",width:1.5}});}')
 parts.append('  Plotly.newPlot("chart-hgex-spy",[{x:hgS,y:hgV,type:"bar",marker:{color:hgColors}}],')
-parts.append('    Object.assign({},T,{shapes:hgShapes,yaxis:Object.assign({},T.yaxis,{title:{text:"$bn/1%",font:{size:9}}})}),CFG);')
+parts.append('    Object.assign({},T,{shapes:hgShapes,xaxis:Object.assign({},T.xaxis,{type:"linear",tickformat:"d"}),yaxis:Object.assign({},T.yaxis,{title:{text:"$bn/1%",font:{size:9}}})}),CFG);')
 parts.append('}')
 parts.append('window.addEventListener("resize",function(){')
 parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda","chart-hgex-spy"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
