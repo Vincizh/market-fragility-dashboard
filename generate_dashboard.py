@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
-"""De-Lever Signal Dashboard Generator"""
+"""De-Lever Signal Dashboard Generator.
+
+Phase 3 adds a stateless, recompute-from-scratch analytics layer:
+  * Part 0 : Net Liquidity = WALCL - TGA - RRP (FRED RRPONTSYD).
+  * Part A : Historical LPI reconstruction (expanding no-look-ahead percentiles),
+             a conditional forward-return / tail-risk table vs the S&P 500, and a
+             momentum / breadth / regime layer.
+  * Part B : CFTC COT crowding layer (TFF + Disaggregated via Socrata) plus a
+             Treasury basis-trade proxy gauge.
+  * Part C : Three-layer page architecture (Fragility / Crowding / Amplifiers).
+
+Everything is derived from full-history API pulls each run; no committed state
+files, no workflow changes. Every fetch degrades gracefully in isolation.
+"""
 
 import yfinance as yf
 import requests
@@ -8,6 +21,7 @@ import numpy as np
 import json
 import io
 import zipfile
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -59,8 +73,130 @@ src_lbl  = "Binance" if bnb_btc_fr is not None else "OKX"
 btc_pos  = btc_fr > 0
 eth_pos  = eth_fr > 0
 
-# --- COT ---
-print("Fetching COT...")
+# ---------------------------------------------------------------------------
+# COT crowding layer (Part B) — unified CFTC Socrata fetch
+# ---------------------------------------------------------------------------
+# One generalized fetcher replaces the old NQ-only legacy-zip pull. It feeds
+# both the Phase-1 CTA/NQ signal (kept identical) and the new crowding panel.
+print("Fetching COT (CFTC Socrata)...")
+
+SOCRATA_BASE = "https://publicreporting.cftc.gov/resource/{}.json"
+# Candidate dataset IDs verified at build time (columns checked, not trusted blindly).
+COT_TFF_CANDIDATES = ["gpe5-46if"]   # Traders in Financial Futures, Futures-Only
+COT_DIS_CANDIDATES = ["72hh-3qpy"]   # Disaggregated, Futures-Only
+
+
+def socrata_get(ds, params, retries=3):
+    url = SOCRATA_BASE.format(ds)
+    last = None
+    for a in range(retries):
+        try:
+            r = requests.get(url, params=params, timeout=45)
+            if r.status_code == 200:
+                return r.json()
+            last = "HTTP {}".format(r.status_code)
+        except Exception as e:
+            last = str(e)
+    raise RuntimeError("socrata {} failed: {}".format(ds, last))
+
+
+def discover_dataset(candidates, required_cols):
+    """Return the first candidate id whose columns include required_cols."""
+    for ds in candidates:
+        try:
+            row = socrata_get(ds, {"$limit": 1})
+            if row and all(c in row[0] for c in required_cols):
+                return ds
+        except Exception as e:
+            print("  dataset probe {} failed: {}".format(ds, e))
+    return None
+
+
+def distinct_names(ds):
+    try:
+        res = socrata_get(ds, {"$select": "distinct contract_market_name", "$limit": 8000})
+        return [x["contract_market_name"] for x in res if x.get("contract_market_name")]
+    except Exception as e:
+        print("  distinct_names {} failed: {}".format(ds, e))
+        return []
+
+
+def match_contract(ds, primary, keywords, names_cache):
+    """Prefer the exact primary name; else contains-match keywords, newest wins."""
+    try:
+        r = socrata_get(ds, {"contract_market_name": primary,
+                             "$order": "report_date_as_yyyy_mm_dd DESC", "$limit": 1})
+        if r:
+            return primary
+    except Exception:
+        pass
+    cands = [n for n in names_cache if all(k.lower() in n.lower() for k in keywords)]
+    best, best_date = None, ""
+    for n in cands:
+        try:
+            r = socrata_get(ds, {"contract_market_name": n,
+                                 "$order": "report_date_as_yyyy_mm_dd DESC", "$limit": 1})
+            if r:
+                d = str(r[0].get("report_date_as_yyyy_mm_dd", ""))
+                if d > best_date:
+                    best, best_date = n, d
+        except Exception:
+            continue
+    return best
+
+
+def _num(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def fetch_cot_series(ds, contract, kind):
+    """Return a DataFrame indexed by report date with net-position columns.
+
+    kind='tff'  -> lev_net (+ am_net) from Leveraged Funds / Asset Managers.
+    kind='dis'  -> mm_net from Managed Money.
+    """
+    if kind == "tff":
+        sel = ("report_date_as_yyyy_mm_dd,open_interest_all,"
+               "lev_money_positions_long,lev_money_positions_short,"
+               "asset_mgr_positions_long,asset_mgr_positions_short")
+    else:
+        sel = ("report_date_as_yyyy_mm_dd,open_interest_all,"
+               "m_money_positions_long_all,m_money_positions_short_all")
+    res = socrata_get(ds, {"contract_market_name": contract, "$select": sel,
+                           "$order": "report_date_as_yyyy_mm_dd ASC", "$limit": 6000})
+    df = pd.DataFrame(res)
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["report_date_as_yyyy_mm_dd"])
+    df = df.sort_values("date").set_index("date")
+    df["oi"] = df["open_interest_all"].map(_num)
+    if kind == "tff":
+        df["lev_net"] = df["lev_money_positions_long"].map(_num) - df["lev_money_positions_short"].map(_num)
+        df["am_net"]  = df["asset_mgr_positions_long"].map(_num) - df["asset_mgr_positions_short"].map(_num)
+    else:
+        df["mm_net"] = df["m_money_positions_long_all"].map(_num) - df["m_money_positions_short_all"].map(_num)
+    return df
+
+
+def pct_of(arr, val):
+    a = np.asarray(arr, dtype=float)
+    a = a[~np.isnan(a)]
+    if len(a) == 0 or val != val:
+        return float("nan")
+    return float((a <= val).sum()) / len(a) * 100.0
+
+
+def zscore_156(series):
+    s = series.dropna().tail(156)
+    if len(s) < 20 or s.std(ddof=0) == 0:
+        return float("nan")
+    return float((s.iloc[-1] - s.mean()) / s.std(ddof=0))
+
+
+# Phase-1 NQ signal defaults (kept identical to prior behaviour)
 cot_net = cot_change = 0
 cot_pct = 0.0
 cot_date = "N/A"
@@ -68,40 +204,136 @@ cot_dates_list = []
 cot_vals_list  = []
 cta_covering   = False
 
-def fetch_cot(year):
-    url = "https://www.cftc.gov/files/dea/history/fut_fin_txt_{}.zip".format(year)
-    r = requests.get(url, timeout=45)
-    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-        with z.open(z.namelist()[0]) as f:
-            return pd.read_csv(f, low_memory=False)
+# Crowding-layer market definitions (WHO to track per spec)
+EQUITY_MARKETS = [  # (key, label, primary contract, keyword fallback)
+    ("SPX", "E-mini S&P 500",  "E-MINI S&P 500",           ["e-mini", "s&p 500"]),
+    ("NQ",  "Nasdaq-100",      "NASDAQ-100 Consolidated",  ["nasdaq", "consolidated"]),
+    ("RTY", "E-mini Russell 2000", "RUSSELL E-MINI",       ["russell", "e-mini"]),
+]
+RATES_MARKETS = [
+    ("UST2Y",  "2-Year UST",  "UST 2Y NOTE",  ["ust", "2y"]),
+    ("UST5Y",  "5-Year UST",  "UST 5Y NOTE",  ["ust", "5y"]),
+    ("UST10Y", "10-Year UST", "UST 10Y NOTE", ["ust", "10y"]),
+]
+USD_MARKET = ("USD", "US Dollar Index", "USD INDEX", ["dollar", "index"])
+CONTEXT_MARKETS = [  # Disaggregated / Managed Money
+    ("WTI",  "WTI Crude", "CRUDE OIL, LIGHT SWEET-WTI", ["crude", "wti"]),
+    ("GOLD", "Gold",      "GOLD",                       ["gold"]),
+]
+
+cot_markets = {}     # key -> computed reading dict
+cot_matched = {}     # key -> matched contract name (logged)
+cot_report_date = None
+cot_ok = False
+basis_proxy = float("nan")
+basis_tenors = {}    # tenor key -> {am_pct, lev_short_pct, score}
 
 try:
-    yr = datetime.now().year
-    frames = []
-    for y in [yr - 1, yr]:
-        try:
-            frames.append(fetch_cot(y))
-        except Exception as e:
-            print("COT {} error: {}".format(y, e))
-    if frames:
-        all_cot = pd.concat(frames)
-        ndx = all_cot[all_cot["Market_and_Exchange_Names"] == "NASDAQ-100 Consolidated - CHICAGO MERCANTILE EXCHANGE"].copy()
-        ndx = ndx.sort_values("Report_Date_as_YYYY-MM-DD")
-        ndx["lev_net"]     = ndx["Lev_Money_Positions_Long_All"] - ndx["Lev_Money_Positions_Short_All"]
-        ndx["lev_net_pct"] = ndx["lev_net"] / ndx["Open_Interest_All"] * 100
-        recent = ndx.tail(16)
-        last = recent.iloc[-1]
-        cot_net    = int(last["lev_net"])
-        cot_pct    = float(last["lev_net_pct"])
-        cot_date   = str(last["Report_Date_as_YYYY-MM-DD"])
-        cot_change = cot_net - int(recent.iloc[-2]["lev_net"])
-        cot_dates_list = recent["Report_Date_as_YYYY-MM-DD"].tolist()
-        cot_vals_list  = [int(x) for x in recent["lev_net"].tolist()]
-        cta_covering   = cot_change > 0
-except Exception as e:
-    print("COT processing error:", e)
+    tff_cols = ["contract_market_name", "report_date_as_yyyy_mm_dd", "open_interest_all",
+                "lev_money_positions_long", "lev_money_positions_short",
+                "asset_mgr_positions_long", "asset_mgr_positions_short"]
+    dis_cols = ["contract_market_name", "report_date_as_yyyy_mm_dd",
+                "m_money_positions_long_all", "m_money_positions_short_all"]
+    ds_tff = discover_dataset(COT_TFF_CANDIDATES, tff_cols)
+    ds_dis = discover_dataset(COT_DIS_CANDIDATES, dis_cols)
+    print("COT datasets: TFF={} DIS={}".format(ds_tff, ds_dis))
+    tff_names = distinct_names(ds_tff) if ds_tff else []
+    dis_names = distinct_names(ds_dis) if ds_dis else []
 
-print("COT net={:,} pct={:.1f}% change={:+,}".format(cot_net, cot_pct, cot_change))
+    def build_market(key, label, primary, kw, ds, names, kind):
+        matched = match_contract(ds, primary, kw, names)
+        if not matched:
+            print("  COT {}: no contract matched".format(key))
+            return
+        df = fetch_cot_series(ds, matched, kind)
+        if df.empty:
+            print("  COT {}: no rows for {}".format(key, matched))
+            return
+        col = "lev_net" if kind == "tff" else "mm_net"
+        net = df[col]
+        cur = float(net.iloc[-1])
+        chg4 = float(net.iloc[-1] - net.iloc[-5]) if len(net) >= 5 else float("nan")
+        rec = {
+            "label": label, "contract": matched, "kind": kind,
+            "net": cur, "chg4": chg4,
+            "pct": pct_of(net.values, cur),
+            "z": zscore_156(net),
+            "date": str(df.index[-1].date()),
+            "oi": float(df["oi"].iloc[-1]) if "oi" in df else float("nan"),
+        }
+        if kind == "tff":
+            rec["am_net"] = float(df["am_net"].iloc[-1])
+            rec["am_pct"] = pct_of(df["am_net"].values, df["am_net"].iloc[-1])
+            rec["lev_short_pct"] = pct_of((-net).values, -cur)  # crowding of SHORT side
+            rec["_am_series"] = df["am_net"]
+            rec["_lev_series"] = net
+        cot_markets[key] = rec
+        cot_matched[key] = matched
+        print("  COT {} [{}] net={:,.0f} pct={:.0f} z={:.2f} d4={:+,.0f} as_of={}".format(
+            key, matched, cur, rec["pct"], rec["z"] if rec["z"] == rec["z"] else float('nan'),
+            chg4 if chg4 == chg4 else 0, rec["date"]))
+
+    if ds_tff:
+        for k, lbl, pri, kw in EQUITY_MARKETS + RATES_MARKETS + [USD_MARKET]:
+            try:
+                build_market(k, lbl, pri, kw, ds_tff, tff_names, "tff")
+            except Exception as e:
+                print("  COT {} error: {}".format(k, e))
+    if ds_dis:
+        for k, lbl, pri, kw in CONTEXT_MARKETS:
+            try:
+                build_market(k, lbl, pri, kw, ds_dis, dis_names, "dis")
+            except Exception as e:
+                print("  COT {} error: {}".format(k, e))
+
+    # Phase-1 NQ signal from the unified pull (identical definition to before)
+    if "NQ" in cot_markets:
+        nq = cot_markets["NQ"]
+        df_nq = fetch_cot_series(ds_tff, nq["contract"], "tff").tail(16)
+        cot_net    = int(nq["net"])
+        cot_pct    = float(nq["net"] / nq["oi"] * 100.0) if nq.get("oi") else 0.0
+        cot_date   = nq["date"]
+        cot_change = int(nq["chg4"] / 4) if False else int(df_nq["lev_net"].iloc[-1] - df_nq["lev_net"].iloc[-2])
+        cot_dates_list = [d.strftime("%Y-%m-%d") for d in df_nq.index]
+        cot_vals_list  = [int(x) for x in df_nq["lev_net"].tolist()]
+        cta_covering   = cot_change > 0
+
+    # Basis-trade proxy (Part B3): AM-long crowding vs LF-short crowding across tenors
+    tenor_scores = []
+    for tk in ["UST2Y", "UST5Y", "UST10Y"]:
+        m = cot_markets.get(tk)
+        if not m:
+            continue
+        am_p = m.get("am_pct", float("nan"))
+        lev_short_p = m.get("lev_short_pct", float("nan"))
+        if am_p == am_p and lev_short_p == lev_short_p:
+            sc = (am_p + lev_short_p) / 2.0
+            basis_tenors[tk] = {"am_pct": am_p, "lev_short_pct": lev_short_p, "score": sc}
+            tenor_scores.append(sc)
+    if tenor_scores:
+        basis_proxy = float(np.mean(tenor_scores))
+
+    dates_all = [m["date"] for m in cot_markets.values()]
+    if dates_all:
+        cot_report_date = max(dates_all)
+    cot_ok = bool(cot_markets)
+except Exception as e:
+    print("COT layer error (non-fatal):", e)
+
+print("COT net={:,} pct={:.1f}% change={:+,} markets={} basis_proxy={}".format(
+    cot_net, cot_pct, cot_change, len(cot_markets),
+    "{:.1f}".format(basis_proxy) if basis_proxy == basis_proxy else "N/A"))
+
+# COT freshness
+cot_stale = False
+if cot_report_date:
+    try:
+        age_days = (datetime.now(timezone.utc).date() - datetime.strptime(cot_report_date, "%Y-%m-%d").date()).days
+        cot_stale = age_days > 10
+    except Exception:
+        age_days = None
+else:
+    age_days = None
 
 # --- Correlation ---
 print("Fetching correlation...")
@@ -124,17 +356,20 @@ for i in range(21, len(rets) + 1):
 corr_declining = avg_c2w < avg_c1m
 print("Corr 1M={:.3f} 2W={:.3f} declining={}".format(avg_c1m, avg_c2w, corr_declining))
 
-# --- Liquidity Pressure Index (LPI / 流动性压力指数) ---
-# 4-factor composite: SOFR + Treasury duration supply + inverted Fed net liquidity + VIX.
-# Each factor -> rolling historical percentile (trailing ~560-week window), averaged to 0-100.
-# Higher value = higher pressure on equities. Every fetch is guarded so one API failure
-# degrades gracefully (factor dropped, LPI computed from the rest).
-print("Fetching LPI factors...")
-import os
+# ---------------------------------------------------------------------------
+# Liquidity Pressure Index (LPI) — historical reconstruction (Part A1)
+# ---------------------------------------------------------------------------
+# 4 factors -> weekly (W-WED) -> expanding-window, no-look-ahead percentile with
+# a 156-week burn-in and a 560-week lookback cap. LPI = mean of available factor
+# percentiles (net liquidity inverted), emitted where >=3 factors are valid.
+print("Fetching LPI factors + reconstructing history...")
 
-LPI_WINDOW = 560  # ~11 years of weekly observations
+LPI_WINDOW   = 560   # ~11y lookback cap
+LPI_BURN     = 156   # 3y burn-in before a percentile is emitted
+FACTOR_START = "2003-01-01"
 
-def fred_csv(series, start="2010-01-01"):
+
+def fred_csv(series, start=FACTOR_START):
     url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={}&observation_start={}".format(series, start)
     r = requests.get(url, timeout=30)
     df = pd.read_csv(io.StringIO(r.text))
@@ -143,24 +378,33 @@ def fred_csv(series, start="2010-01-01"):
     df["val"] = pd.to_numeric(df["val"], errors="coerce")
     return df.dropna().set_index("date")["val"]
 
-def to_weekly(s):
-    return s.resample("W-FRI").last().dropna()
 
-def pctile_series(s, window=LPI_WINDOW):
-    # percentile rank of each point vs its own trailing window (inclusive)
+def to_weekly(s):
+    # W-WED alignment: WALCL/WTREGEN are Wednesday-dated; RRP/SOFR/VIX resample cleanly.
+    return s.resample("W-WED").last().dropna()
+
+
+def pctile_series(s, window=LPI_WINDOW, burn=LPI_BURN):
+    """Expanding/rolling causal percentile. Each point uses ONLY data at or before
+    it (no look-ahead). Emits NaN until `burn` observations exist."""
     vals = s.values
     out = []
     for i in range(len(vals)):
+        if i + 1 < burn:
+            out.append(np.nan)
+            continue
         lo = max(0, i - window + 1)
         w = vals[lo:i + 1]
         out.append(float((w <= vals[i]).sum()) / len(w) * 100.0)
     return pd.Series(out, index=s.index)
 
-lpi_pct   = {}   # factor key -> weekly percentile Series
-lpi_raw   = {}   # factor key -> current raw reading (for display)
-lpi_ok    = {}   # factor key -> bool availability
 
-# Factor 1 — Short rate (SOFR spliced with DFF/EFFR for pre-2018 depth)
+lpi_pct   = {}   # factor key -> weekly percentile Series (with burn-in NaNs)
+lpi_raw   = {}   # factor key -> current raw reading
+lpi_ok    = {}   # factor key -> availability
+netliq_pct_norrp = None   # for before/after RRP comparison
+
+# Factor 1 — Short rate (SOFR spliced with DFF pre-2018)
 sofr_current = None
 try:
     sofr = to_weekly(fred_csv("SOFR"))
@@ -170,95 +414,291 @@ try:
     except Exception as e:
         print("LPI DFF splice error:", e)
         short_rate = sofr
-    short_rate = short_rate[short_rate.index >= pd.Timestamp("2010-01-01")]
+    short_rate = short_rate[short_rate.index >= pd.Timestamp(FACTOR_START)]
     lpi_pct["short_rate"] = pctile_series(short_rate)
     sofr_current = float(short_rate.iloc[-1])
     lpi_raw["short_rate"] = sofr_current
     lpi_ok["short_rate"] = True
-    print("LPI short_rate weeks={} last={:.3f} pct={:.1f}".format(len(short_rate), sofr_current, lpi_pct["short_rate"].iloc[-1]))
+    print("LPI short_rate weeks={} last={:.3f} pct={:.1f}".format(
+        len(short_rate), sofr_current, lpi_pct["short_rate"].iloc[-1]))
 except Exception as e:
     lpi_ok["short_rate"] = False
     print("LPI short_rate error:", e)
 
-# Factor 2 — Duration supply (weekly Treasury coupon issuance, trailing 4-week sum)
+# Factor 2 — Duration supply (coupon issuance, trailing 4-week sum)
 issuance_4w = None
 try:
     au_rows = []
-    for pg in range(1, 11):
-        url = ("https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query"
-               "?fields=auction_date,offering_amt,security_term"
-               "&filter=security_term:in:(2-Year,3-Year,5-Year,7-Year,10-Year,20-Year,30-Year)"
-               "&sort=-auction_date&page[size]=200&page[number]={}".format(pg))
-        page = None
-        for attempt in range(3):
-            try:
-                page = requests.get(url, timeout=40).json().get("data", [])
-                break
-            except Exception as e:
-                print("LPI auctions page {} retry {}: {}".format(pg, attempt, e))
-        if not page:
+    for attempt in range(3):
+        try:
+            url = ("https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query"
+                   "?fields=auction_date,offering_amt,security_term"
+                   "&filter=security_term:in:(2-Year,3-Year,5-Year,7-Year,10-Year,20-Year,30-Year)"
+                   "&sort=-auction_date&page[size]=10000&page[number]=1")
+            au_rows = requests.get(url, timeout=50).json().get("data", [])
             break
-        au_rows += page
-        if len(page) < 200:
-            break
+        except Exception as e:
+            print("LPI auctions retry {}: {}".format(attempt, e))
     if not au_rows:
         raise RuntimeError("no auction rows")
     au = pd.DataFrame(au_rows)
     au["auction_date"] = pd.to_datetime(au["auction_date"])
     au["offering_amt"] = pd.to_numeric(au["offering_amt"], errors="coerce")
     au = au.dropna(subset=["offering_amt"])
-    wk = au.set_index("auction_date")["offering_amt"].resample("W-FRI").sum().fillna(0)
+    au = au[au["auction_date"] >= pd.Timestamp(FACTOR_START)]
+    wk = au.set_index("auction_date")["offering_amt"].resample("W-WED").sum().fillna(0)
     iss4 = (wk.rolling(4).sum().dropna()) / 1e9  # -> $ billions
     lpi_pct["duration_supply"] = pctile_series(iss4)
     issuance_4w = float(iss4.iloc[-1])
     lpi_raw["duration_supply"] = issuance_4w
     lpi_ok["duration_supply"] = True
-    print("LPI duration_supply weeks={} last_4w=${:.1f}B pct={:.1f}".format(len(iss4), issuance_4w, lpi_pct["duration_supply"].iloc[-1]))
+    print("LPI duration_supply weeks={} last_4w=${:.1f}B pct={:.1f}".format(
+        len(iss4), issuance_4w, lpi_pct["duration_supply"].iloc[-1]))
 except Exception as e:
     lpi_ok["duration_supply"] = False
     print("LPI duration_supply error:", e)
 
-# Factor 3 — Fed net liquidity (WALCL - TGA), INVERTED
+# Factor 3 — Fed net liquidity = WALCL - TGA - RRP (Part 0), INVERTED
 netliq_current_t = None
+netliq_norrp_t = None
+rrp_current_b = None
 try:
     walcl = to_weekly(fred_csv("WALCL"))
     tga   = to_weekly(fred_csv("WTREGEN"))
-    # Normalize both to $ billions (FRED serves WALCL & WTREGEN in $millions; verify by magnitude).
+    # Normalize all to $ billions. WALCL/WTREGEN arrive in $millions; RRP in $billions.
     def _to_bil(s):
         return s / 1000.0 if float(s.iloc[-1]) > 100000 else s
     walcl_b = _to_bil(walcl)
     tga_b   = _to_bil(tga)
-    netliq = (walcl_b - tga_b).dropna()  # $ billions
-    lpi_pct["net_liquidity"] = 100.0 - pctile_series(netliq)  # INVERTED: low liquidity = high pressure
-    netliq_current_t = float(netliq.iloc[-1]) / 1000.0  # $ trillions
+    try:
+        rrp = to_weekly(fred_csv("RRPONTSYD"))
+        rrp_b = rrp / 1000.0 if float(rrp.iloc[-1]) > 100000 else rrp  # already $B
+        rrp_current_b = float(rrp_b.iloc[-1])
+    except Exception as e:
+        print("LPI RRP error (degrading to WALCL-TGA):", e)
+        rrp_b = pd.Series(0.0, index=walcl_b.index)
+    idx = walcl_b.index.union(tga_b.index).union(rrp_b.index)
+    walcl_a = walcl_b.reindex(idx).ffill()
+    tga_a   = tga_b.reindex(idx).ffill()
+    rrp_a   = rrp_b.reindex(idx).ffill().fillna(0.0)
+    netliq = (walcl_a - tga_a - rrp_a).dropna()          # $B, with RRP
+    netliq_norrp = (walcl_a - tga_a).dropna()             # $B, legacy (no RRP)
+    lpi_pct["net_liquidity"] = 100.0 - pctile_series(netliq)   # INVERTED
+    netliq_pct_norrp = 100.0 - pctile_series(netliq_norrp)
+    netliq_current_t = float(netliq.iloc[-1]) / 1000.0    # $T
+    netliq_norrp_t = float(netliq_norrp.iloc[-1]) / 1000.0
     lpi_raw["net_liquidity"] = netliq_current_t
     lpi_ok["net_liquidity"] = True
-    print("LPI net_liquidity weeks={} last=${:.3f}T (WALCL=${:.3f}T TGA=${:.1f}B) pct_inv={:.1f}".format(
-        len(netliq), netliq_current_t, float(walcl_b.iloc[-1]) / 1000.0, float(tga_b.iloc[-1]), lpi_pct["net_liquidity"].iloc[-1]))
+    print("LPI net_liquidity weeks={} last=${:.3f}T (WALCL=${:.3f}T TGA=${:.0f}B RRP=${:.0f}B) pct_inv={:.1f}".format(
+        len(netliq), netliq_current_t, float(walcl_a.iloc[-1]) / 1000.0,
+        float(tga_a.iloc[-1]), float(rrp_a.iloc[-1]), lpi_pct["net_liquidity"].iloc[-1]))
 except Exception as e:
     lpi_ok["net_liquidity"] = False
     print("LPI net_liquidity error:", e)
 
-# Factor 4 — Vol amplifier (VIX percentile; deep history via Yahoo). Primary GEX proxy.
+# Factor 4 — Vol amplifier (VIX percentile, deep history via Yahoo)
 vix_lpi_current = None
 try:
     vix_hist = yf.download("^VIX", period="max", auto_adjust=True, progress=False)["Close"]
     vix_hist = to_weekly(vix_hist.squeeze())
+    vix_hist = vix_hist[vix_hist.index >= pd.Timestamp(FACTOR_START)]
     lpi_pct["vol_amplifier"] = pctile_series(vix_hist)
     vix_lpi_current = float(vix_hist.iloc[-1])
     lpi_raw["vol_amplifier"] = vix_lpi_current
     lpi_ok["vol_amplifier"] = True
-    print("LPI vol_amplifier weeks={} last={:.2f} pct={:.1f}".format(len(vix_hist), vix_lpi_current, lpi_pct["vol_amplifier"].iloc[-1]))
+    print("LPI vol_amplifier weeks={} last={:.2f} pct={:.1f}".format(
+        len(vix_hist), vix_lpi_current, lpi_pct["vol_amplifier"].iloc[-1]))
 except Exception as e:
     lpi_ok["vol_amplifier"] = False
     print("LPI vol_amplifier error:", e)
 
+lpi_order = ["short_rate", "duration_supply", "net_liquidity", "vol_amplifier"]
+lpi_labels = {
+    "short_rate":      "Short Rate 资金价格",
+    "duration_supply": "Duration Supply 久期供给",
+    "net_liquidity":   "Net Liquidity 银行水位 (inv)",
+    "vol_amplifier":   "Vol Amplifier 波动放大器",
+}
+
+
+def reconstruct_lpi(pct_dict):
+    """Mean of available factor percentiles, requiring >=3 valid factors per week."""
+    if not pct_dict:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+    df = pd.concat(pct_dict, axis=1, sort=True).sort_index()
+    valid = df.notna().sum(axis=1)
+    comp = df.mean(axis=1)
+    comp = comp[valid >= 3]
+    return comp.dropna(), valid
+
+
+avail_pct = {k: lpi_pct[k] for k in lpi_order if lpi_ok.get(k)}
+lpi_series_full, lpi_valid_count = reconstruct_lpi(avail_pct)
+lpi_has = len(lpi_series_full) > 0
+lpi_composite = float(lpi_series_full.iloc[-1]) if lpi_has else float("nan")
+
+# LPI "before RRP fix" (net_liquidity without RRP) for reporting
+lpi_composite_before = float("nan")
+if lpi_has and netliq_pct_norrp is not None:
+    pct_before = dict(avail_pct)
+    pct_before["net_liquidity"] = netliq_pct_norrp
+    lpi_before_series, _ = reconstruct_lpi(pct_before)
+    if len(lpi_before_series):
+        lpi_composite_before = float(lpi_before_series.iloc[-1])
+
+# Reconstruction diagnostics
+recon_earliest = lpi_series_full.index[0].strftime("%Y-%m-%d") if lpi_has else "N/A"
+recon_n = len(lpi_series_full)
+top10 = []
+if lpi_has:
+    for d, v in lpi_series_full.sort_values(ascending=False).head(10).items():
+        top10.append((d.strftime("%Y-%m-%d"), round(float(v), 1)))
+print("LPI reconstruction: earliest={} weeks={} composite={:.1f} (before RRP={:.1f})".format(
+    recon_earliest, recon_n, lpi_composite if lpi_has else float("nan"),
+    lpi_composite_before if lpi_composite_before == lpi_composite_before else float("nan")))
+print("LPI top-10 weeks:", top10)
+
+# ---------------------------------------------------------------------------
+# Conditional tail table (Part A2) — forward S&P 500 stats bucketed by LPI band
+# ---------------------------------------------------------------------------
+LPI_BANDS = [(0, 40, "0-40"), (40, 60, "40-60"), (60, 80, "60-80"), (80, 100.01, "80-100")]
+
+
+def band_key(v):
+    if v != v:
+        return None
+    for lo, hi, name in LPI_BANDS:
+        if lo <= v < hi:
+            return name
+    return "80-100"
+
+
+tail_table = {}     # band -> horizon -> stats dict
+tail_ok = False
+spx_weekly = None
+try:
+    spx = yf.download("^GSPC", period="max", auto_adjust=True, progress=False)["Close"]
+    spx_weekly = to_weekly(spx.squeeze())
+    if lpi_has:
+        df = pd.DataFrame({"lpi": lpi_series_full}).join(
+            pd.DataFrame({"spx": spx_weekly}), how="inner").dropna()
+        closes = df["spx"].values
+        lpis = df["lpi"].values
+        rows = {h: {"ALL": []} for h in (4, 8)}
+        for name in [b[2] for b in LPI_BANDS]:
+            for h in (4, 8):
+                rows[h][name] = []
+        nrec = len(df)
+        for i in range(nrec):
+            bk = band_key(lpis[i])
+            for h in (4, 8):
+                if i + h >= nrec:
+                    continue
+                base = closes[i]
+                path = closes[i:i + h + 1]                # includes week t
+                fwd_ret = closes[i + h] / base - 1.0
+                wret = np.diff(path) / path[:-1]
+                vol = float(np.std(wret, ddof=1) * np.sqrt(52)) if len(wret) > 1 else float("nan")
+                peak = np.maximum.accumulate(path)
+                mdd = float(np.min(path / peak - 1.0))
+                rec = (fwd_ret, vol, mdd)
+                rows[h]["ALL"].append(rec)
+                if bk:
+                    rows[h][bk].append(rec)
+
+        def agg(recs):
+            if not recs:
+                return None
+            r = np.array([x[0] for x in recs], dtype=float)
+            v = np.array([x[1] for x in recs], dtype=float)
+            d = np.array([x[2] for x in recs], dtype=float)
+            v = v[~np.isnan(v)]
+            return {
+                "n": len(recs),
+                "mean_ret": float(np.mean(r)),
+                "med_ret": float(np.median(r)),
+                "vol": float(np.mean(v)) if len(v) else float("nan"),
+                "p5": float((d < -0.05).mean() * 100.0),
+                "p10": float((d < -0.10).mean() * 100.0),
+                "avg_dd": float(np.mean(d) * 100.0),
+            }
+
+        for name in ["ALL"] + [b[2] for b in LPI_BANDS]:
+            tail_table[name] = {h: agg(rows[h][name]) for h in (4, 8)}
+        tail_ok = True
+        print("Tail table built. N(ALL,4w)={} N(ALL,8w)={}".format(
+            tail_table["ALL"][4]["n"], tail_table["ALL"][8]["n"]))
+except Exception as e:
+    print("Tail table error (non-fatal):", e)
+
+current_band = band_key(lpi_composite) if lpi_has else None
+
+# ---------------------------------------------------------------------------
+# Momentum + breadth + regime (Part A3)
+# ---------------------------------------------------------------------------
+dlpi_13w = dlpi_4w = float("nan")
+breadth = 0
+factor_dir = {}   # factor -> "up"/"down"/"flat" over last 4 weeks
+if lpi_has:
+    s = lpi_series_full
+    if len(s) >= 14:
+        dlpi_13w = float(s.iloc[-1] - s.iloc[-14])
+    if len(s) >= 5:
+        dlpi_4w = float(s.iloc[-1] - s.iloc[-5])
+for k in lpi_order:
+    if not lpi_ok.get(k):
+        continue
+    ps = lpi_pct[k].dropna()
+    if len(ps) >= 5:
+        now, ago = float(ps.iloc[-1]), float(ps.iloc[-5])
+        factor_dir[k] = "up" if now > ago + 0.5 else ("down" if now < ago - 0.5 else "flat")
+        if now > 70 and now > ago:
+            breadth += 1
+    else:
+        factor_dir[k] = "flat"
+
+
+def regime_cell(lpi, d13):
+    level = "High" if lpi >= 60 else "Low"
+    if d13 != d13:
+        direction = "Flat"
+    elif d13 > 2:
+        direction = "Rising"
+    elif d13 < -2:
+        direction = "Falling"
+    else:
+        direction = "Flat"
+    if level == "Low" and direction in ("Falling", "Flat"):
+        return level, direction, "Cushion thick, stable — full risk budget", "#10b981", "green"
+    if level == "Low" and direction == "Rising":
+        return level, direction, "Inflection watch — pressure building from low base", "#f59e0b", "yellow"
+    if level == "High" and direction == "Falling":
+        return level, direction, "Decompressing — pressure receding from highs", "#14b8a6", "teal"
+    if level == "High" and direction == "Rising":
+        return level, direction, "Danger zone — cut leverage, add hedges", "#ef4444", "red"
+    return level, direction, "Elevated but stable — keep hedges on", "#f97316", "orange"
+
+
+if lpi_has:
+    reg_level, reg_dir, reg_msg, reg_col, reg_cls = regime_cell(lpi_composite, dlpi_13w)
+else:
+    reg_level, reg_dir, reg_msg, reg_col, reg_cls = "N/A", "N/A", "Insufficient data", "#64748b", "gray"
+print("Regime: {} & {} -> {} | breadth={}/4 | dLPI13w={} dLPI4w={}".format(
+    reg_level, reg_dir, reg_msg, breadth,
+    round(dlpi_13w, 1) if dlpi_13w == dlpi_13w else "NA",
+    round(dlpi_4w, 1) if dlpi_4w == dlpi_4w else "NA"))
+
+# Full-history + 52w LPI chart series
+lpi_hist_dates = lpi_hist_vals = []
+lpi_full_dates = lpi_full_vals = []
+if lpi_has:
+    s52 = lpi_series_full.tail(52)
+    lpi_hist_dates = [d.strftime("%Y-%m-%d") for d in s52.index]
+    lpi_hist_vals  = [round(float(v), 1) for v in s52.values]
+    lpi_full_dates = [d.strftime("%Y-%m-%d") for d in lpi_series_full.index]
+    lpi_full_vals  = [round(float(v), 1) for v in lpi_series_full.values]
+
 # --- GEX Monitor (Phase 2b, FlashAlpha free tier) ---------------------------
-# SPX GEX is tier-restricted on the free plan (and a 403 still burns a quota
-# slot), so the old direct-SPX call is gone. We fetch <=5 single-stock readings
-# per day on a UTC-hour schedule and repoint the Phase-1 GEX signal to NVDA.
-# State survives between hourly CI runs via a JSON block embedded in index.html
-# (the workflow commits only index.html, so a side-car file would be dropped).
 print("Running GEX monitor...")
 import gex_monitor
 
@@ -286,7 +726,6 @@ print("GEX monitor: fetched={} status={} used={}/{} nvda_has={} excluded={}".for
     gex_state["daily"]["count"], gex_monitor.GEX_DAILY_LIMIT,
     gex_nvda["has"], gex_state.get("excluded")))
 
-# Phase-1 GEX proxy note (NVDA; SPX unavailable on free tier)
 if gex_nvda["has"]:
     gex_note = "NVDA net GEX {} ({})".format(
         gex_monitor.fmt_gex(gex_nvda["net_gex"]),
@@ -294,33 +733,9 @@ if gex_nvda["has"]:
 else:
     gex_note = ""
 
-# Composite: average of available factor percentiles (current reading = last value)
-lpi_labels = {
-    "short_rate":      "Short Rate 资金价格",
-    "duration_supply": "Duration Supply 久期供给",
-    "net_liquidity":   "Net Liquidity 银行水位 (inv)",
-    "vol_amplifier":   "Vol Amplifier 波动放大器",
-}
-lpi_order = ["short_rate", "duration_supply", "net_liquidity", "vol_amplifier"]
-lpi_current = {k: float(lpi_pct[k].iloc[-1]) for k in lpi_order if lpi_ok.get(k)}
-if lpi_current:
-    lpi_composite = sum(lpi_current.values()) / len(lpi_current)
-else:
-    lpi_composite = float("nan")
-
-# 52-week composite history (align available factor percentiles on common weekly index)
-lpi_hist_dates = []
-lpi_hist_vals  = []
-if lpi_current:
-    aligned = pd.concat({k: lpi_pct[k] for k in lpi_current}, axis=1, sort=True).dropna()
-    if len(aligned):
-        lpi_series = aligned.mean(axis=1).tail(52)
-        lpi_hist_dates = [d.strftime("%Y-%m-%d") for d in lpi_series.index]
-        lpi_hist_vals  = [round(float(v), 1) for v in lpi_series.values]
-
-print("LPI composite={:.1f} factors_used={}/4".format(lpi_composite if lpi_current else float('nan'), len(lpi_current)))
-
-# --- Pre-compute all display values ---
+# ---------------------------------------------------------------------------
+# Pre-compute display values
+# ---------------------------------------------------------------------------
 sig_count = sum([vix_contango, btc_pos, eth_pos, cta_covering, corr_declining])
 now_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -335,26 +750,26 @@ bdg_cot = "badge-green" if cta_covering   else "badge-red"
 bdg_cor = "badge-green" if corr_declining else "badge-yellow"
 bdg_fun = "badge-green" if (btc_pos and eth_pos) else ("badge-yellow" if (btc_pos or eth_pos) else "badge-red")
 
-txt_vix = "CONTANGO \u2705" if vix_contango   else "BACKWARDATION \u26a0\ufe0f"
-txt_cot = "SHORT COVERING \u2705" if cta_covering else "ADDING SHORTS \u26a0\ufe0f"
-txt_cor = "DECLINING \u2705"      if corr_declining else "ELEVATED \u26a0\ufe0f"
+txt_vix = "CONTANGO ✅" if vix_contango   else "BACKWARDATION ⚠️"
+txt_cot = "SHORT COVERING ✅" if cta_covering else "ADDING SHORTS ⚠️"
+txt_cor = "DECLINING ✅"      if corr_declining else "ELEVATED ⚠️"
 if btc_pos and eth_pos:
-    txt_fun = "BOTH POSITIVE \u2705 \u2014 Risk appetite returning"
+    txt_fun = "BOTH POSITIVE ✅ — Risk appetite returning"
 elif btc_pos or eth_pos:
-    txt_fun = "MIXED \u26a0\ufe0f \u2014 Partial recovery"
+    txt_fun = "MIXED ⚠️ — Partial recovery"
 else:
-    txt_fun = "BOTH NEGATIVE \u26a0\ufe0f \u2014 Still de-risking"
+    txt_fun = "BOTH NEGATIVE ⚠️ — Still de-risking"
 
 if sig_count <= 1:
-    cmsg, ccol = "No signals confirmed \u2014 stay out", "#ef4444"
+    cmsg, ccol = "No signals confirmed — stay out", "#ef4444"
 elif sig_count == 2:
-    cmsg, ccol = "Watch closely \u2014 de-lever may be abating", "#f59e0b"
+    cmsg, ccol = "Watch closely — de-lever may be abating", "#f59e0b"
 elif sig_count == 3:
     cmsg, ccol = "Threshold reached: mechanical selling likely exhausting", "#10b981"
 elif sig_count == 4:
-    cmsg, ccol = "Strong confirmation \u2014 consider re-entry on core names", "#10b981"
+    cmsg, ccol = "Strong confirmation — consider re-entry on core names", "#10b981"
 else:
-    cmsg, ccol = "All signals confirmed \u2014 de-lever complete, re-engage", "#10b981"
+    cmsg, ccol = "All signals confirmed — de-lever complete, re-engage", "#10b981"
 
 dots = ""
 for lbl, ok in [("VIX Contango", vix_contango), ("BTC FR+", btc_pos),
@@ -362,7 +777,6 @@ for lbl, ok in [("VIX Contango", vix_contango), ("BTC FR+", btc_pos),
     css = "filled" if ok else "empty"
     dots = dots + '<div class="dot ' + css + '" title="' + lbl + '"></div>'
 
-# numeric strings
 s_vdiff = "{:+.2f}".format(vix3m_val - vix_val)
 s_v9d   = "{:.1f}".format(vix9d_val)
 s_vix   = "{:.1f}".format(vix_val)
@@ -380,7 +794,6 @@ s_v9d_n = str(round(vix9d_val, 2))
 s_vix_n = str(round(vix_val,   2))
 s_v3m_n = str(round(vix3m_val, 2))
 
-# JSON for charts
 j_vd = json.dumps(vix_dates)
 j_vv = json.dumps(vix_vals_list)
 j_cd = json.dumps(cot_dates_list)
@@ -389,10 +802,9 @@ j_rd = json.dumps(corr_dates)
 j_rh = json.dumps(corr_hist)
 j_rf = json.dumps([0.5] * len(corr_dates))
 
-# --- LPI display values ---
+
 def lpi_band(v):
-    # returns (hex color, css class suffix, status text)
-    if v != v:  # NaN
+    if v != v:
         return "#64748b", "gray", "Insufficient data"
     if v < 40:
         return "#10b981", "green", "Cushion Thick / Market Resilient 库存充足"
@@ -402,24 +814,29 @@ def lpi_band(v):
         return "#f97316", "orange", "Elevated / Reduce leverage, widen hedges 偏高"
     return "#ef4444", "red", "Extreme / Tail risk 5x normal — reduce exposure 极端"
 
-lpi_has = bool(lpi_current)
+
 lpi_col, lpi_cls, lpi_status = lpi_band(lpi_composite)
 s_lpi = "{:.1f}".format(lpi_composite) if lpi_has else "N/A"
 lpi_pos = max(0.0, min(100.0, lpi_composite)) if lpi_has else 0.0
 s_lpi_pos = "{:.1f}".format(lpi_pos)
-lpi_factors_used = "{}/4 factors".format(len(lpi_current)) if lpi_has else "no factors available"
+lpi_factors_used = "{}/4 factors".format(len(avail_pct)) if lpi_has else "no factors available"
 
-# per-factor bar HTML
+ARROW = {"up": "▲", "down": "▼", "flat": "▬"}
+ARROW_COL = {"up": "#ef4444", "down": "#10b981", "flat": "#64748b"}
+
 lpi_bars = ""
 for k in lpi_order:
     lbl = lpi_labels[k]
     if lpi_ok.get(k):
-        v = float(lpi_pct[k].iloc[-1])
+        v = float(lpi_pct[k].dropna().iloc[-1])
         bcol, bcls, _ = lpi_band(v)
         vtxt = "{:.0f}".format(v)
         wpct = "{:.1f}".format(max(0.0, min(100.0, v)))
+        d = factor_dir.get(k, "flat")
+        arr = ('<span style="color:' + ARROW_COL[d] + ';font-size:11px;margin-left:5px">'
+               + ARROW[d] + '</span>')
     else:
-        bcol, vtxt, wpct = "#64748b", "N/A", "0"
+        bcol, vtxt, wpct, arr = "#64748b", "N/A", "0", ""
     amp_badge = ""
     if k == "vol_amplifier" and gex_nvda["has"] and not gex_nvda["positive"]:
         amp_badge = ('<div class="lpi-amp-badge">NVDA negative gamma — '
@@ -427,12 +844,12 @@ for k in lpi_order:
     lpi_bars = (lpi_bars
         + '<div class="lpi-factor">'
         + '<div class="lpi-factor-top"><span class="lpi-factor-lbl">' + lbl + '</span>'
-        + '<span class="lpi-factor-val" style="color:' + bcol + '">' + vtxt + '</span></div>'
+        + '<span class="lpi-factor-val" style="color:' + bcol + '">' + vtxt + arr + '</span></div>'
         + '<div class="lpi-track"><div class="lpi-fill" style="width:' + wpct + '%;background:' + bcol + '"></div></div>'
         + amp_badge
         + '</div>')
 
-# raw-reading footnote strings
+
 def _fmt_raw(k, fmt, *args):
     return fmt.format(*args) if lpi_ok.get(k) else "N/A"
 s_lpi_sofr   = _fmt_raw("short_rate", "{:.2f}%", lpi_raw.get("short_rate", 0))
@@ -442,8 +859,155 @@ s_lpi_vix    = _fmt_raw("vol_amplifier", "{:.1f}", lpi_raw.get("vol_amplifier", 
 
 j_lpi_d = json.dumps(lpi_hist_dates)
 j_lpi_v = json.dumps(lpi_hist_vals)
+j_lpi_fd = json.dumps(lpi_full_dates)
+j_lpi_fv = json.dumps(lpi_full_vals)
 
-# HTML template — plain string concatenation, zero f-strings, zero backslashes in strings
+# --- Tail table HTML ---
+def _pct(x, dp=1):
+    return ("{:+." + str(dp) + "f}%").format(x) if x == x else "N/A"
+def _pctu(x, dp=1):
+    return ("{:." + str(dp) + "f}%").format(x) if x == x else "N/A"
+
+tail_rows_html = ""
+tail_readout = ""
+if tail_ok:
+    row_defs = [("ALL", "All weeks (baseline)")] + [(b[2], b[2]) for b in LPI_BANDS]
+    for key, label in row_defs:
+        for h in (4, 8):
+            st = tail_table.get(key, {}).get(h)
+            hl = (key == current_band and key != "ALL")
+            rcls = ' class="tail-hl"' if hl else ''
+            if not st:
+                tail_rows_html += ('<tr' + rcls + '><td>' + label + '</td><td>' + str(h) + 'w</td>'
+                                   + '<td colspan="6" style="color:#64748b">insufficient</td></tr>')
+                continue
+            tail_rows_html += ('<tr' + rcls + '>'
+                + '<td>' + label + '</td>'
+                + '<td>' + str(h) + 'w</td>'
+                + '<td>' + str(st["n"]) + '</td>'
+                + '<td>' + _pct(st["mean_ret"] * 100) + '</td>'
+                + '<td>' + _pct(st["med_ret"] * 100) + '</td>'
+                + '<td>' + _pctu(st["vol"]) + '</td>'
+                + '<td>' + _pctu(st["p5"]) + '</td>'
+                + '<td>' + _pctu(st["p10"]) + '</td>'
+                + '<td>' + _pct(st["avg_dd"]) + '</td>'
+                + '</tr>')
+    # auto readout for current band (4w) vs baseline
+    if current_band and current_band in tail_table:
+        cur = tail_table[current_band][4]
+        base = tail_table["ALL"][4]
+        if cur and base:
+            ratio = (cur["p10"] / base["p10"]) if base["p10"] > 0 else float("nan")
+            ratio_txt = ("{:.1f}×".format(ratio) if ratio == ratio else "n/a")
+            tail_readout = ("Current LPI {:.0f} → band {}: historically mean 4-week return {} "
+                            "(vs {} baseline) but P(&gt;10% drawdown) {} vs {} baseline — "
+                            "tail risk ~{} normal.").format(
+                lpi_composite, current_band,
+                _pct(cur["mean_ret"] * 100), _pct(base["mean_ret"] * 100),
+                _pctu(cur["p10"]), _pctu(base["p10"]), ratio_txt)
+
+# --- Regime + breadth HTML ---
+s_d13 = ("{:+.1f}".format(dlpi_13w) if dlpi_13w == dlpi_13w else "N/A")
+s_d4  = ("{:+.1f}".format(dlpi_4w) if dlpi_4w == dlpi_4w else "N/A")
+breadth_txt = "{}/4 factors &gt;70th and rising".format(breadth)
+
+# 2x2 matrix quadrant highlight: rows High(top)/Low(bottom), cols Falling-Flat / Rising
+mtx_active = None
+if lpi_has:
+    col = "R" if reg_dir == "Rising" else "L"
+    mtx_active = reg_level[0] + col   # e.g. 'HR','HL','LR','LL'
+mtx_cells = [
+    ("HL", "High · Fall/Flat", "Decompress / stable", "#14b8a6"),
+    ("HR", "High · Rising", "Danger zone", "#ef4444"),
+    ("LL", "Low · Fall/Flat", "Cushion thick", "#10b981"),
+    ("LR", "Low · Rising", "Inflection watch", "#f59e0b"),
+]
+mtx_html = ""
+for cellkey, top, sub, ccol_ in mtx_cells:
+    active = (cellkey == mtx_active)
+    style = ("background:" + ccol_ + ";color:#0d0f14" if active
+             else "background:#0f131b;color:#64748b;border:1px solid #2d3748")
+    mtx_html += ('<div class="mtx-cell" style="' + style + '">'
+                 + '<div class="mtx-top">' + top + '</div>'
+                 + '<div class="mtx-sub">' + sub + '</div></div>')
+
+# --- COT crowding HTML ---
+def _cot_card(m):
+    net = m["net"]
+    chg = m.get("chg4", float("nan"))
+    cls = "green" if net >= 0 else "red"
+    arrow = "▲" if (chg == chg and chg > 0) else ("▼" if (chg == chg and chg < 0) else "▬")
+    acol = "#10b981" if (chg == chg and chg > 0) else ("#ef4444" if (chg == chg and chg < 0) else "#64748b")
+    pct = m.get("pct", float("nan"))
+    z = m.get("z", float("nan"))
+    p = []
+    p.append('<div class="cot-card ' + cls + '">')
+    p.append('<div class="cot-card-head"><span class="cot-sym">' + m["label"] + '</span>'
+             + '<span class="cot-arrow" style="color:' + acol + '">' + arrow + '</span></div>')
+    p.append('<div class="cot-net ' + cls + '">' + "{:+,}".format(int(net)) + '</div>')
+    p.append('<div class="cot-sub">lev net contracts · 4w '
+             + ("{:+,}".format(int(chg)) if chg == chg else "N/A") + '</div>')
+    p.append('<div class="cot-metrics"><span>pctile <b>' + ("{:.0f}".format(pct) if pct == pct else "N/A")
+             + '</b></span><span>z <b>' + ("{:+.1f}".format(z) if z == z else "N/A") + '</b></span></div>')
+    p.append('<div class="cot-track"><div class="cot-fill" style="width:'
+             + ("{:.0f}".format(max(0, min(100, pct))) if pct == pct else "0")
+             + '%;background:' + ("#ef4444" if pct == pct and pct >= 80 else "#6366f1") + '"></div></div>')
+    p.append('<div class="cot-foot">' + m["contract"] + '</div>')
+    p.append('</div>')
+    return "".join(p)
+
+cot_equity_html = "".join(_cot_card(cot_markets[k]) for k, *_ in EQUITY_MARKETS if k in cot_markets)
+cot_rates_html  = "".join(_cot_card(cot_markets[k]) for k, *_ in RATES_MARKETS if k in cot_markets)
+cot_ctx_list = [c for c in CONTEXT_MARKETS] + [USD_MARKET]
+cot_ctx_html = "".join(_cot_card(cot_markets[k]) for k, *_ in cot_ctx_list if k in cot_markets)
+
+# COT freshness banner
+if cot_report_date:
+    fresh_cls = "cot-stale" if cot_stale else "cot-fresh"
+    fresh_txt = ("as of " + cot_report_date
+                 + (" — STALE (" + str(age_days) + "d, holiday delay?)" if cot_stale
+                    else " — " + (str(age_days) + "d old" if age_days is not None else "")))
+else:
+    fresh_cls, fresh_txt = "cot-stale", "COT unavailable"
+
+# --- Basis-trade proxy HTML ---
+basis_has = basis_proxy == basis_proxy
+s_basis = "{:.0f}".format(basis_proxy) if basis_has else "N/A"
+if not basis_has:
+    basis_col, basis_msg = "#64748b", "Insufficient rates COT data"
+elif basis_proxy >= 80:
+    basis_col, basis_msg = "#ef4444", "Basis trade crowded — issuance shocks amplified"
+elif basis_proxy >= 60:
+    basis_col, basis_msg = "#f97316", "Elevated AM-long / LF-short configuration"
+elif basis_proxy >= 40:
+    basis_col, basis_msg = "#f59e0b", "Moderate positioning"
+else:
+    basis_col, basis_msg = "#10b981", "Positioning benign vs history"
+s_basis_pos = "{:.1f}".format(max(0.0, min(100.0, basis_proxy))) if basis_has else "0"
+
+basis_bars_html = ""
+tenor_lbls = {"UST2Y": "2Y", "UST5Y": "5Y", "UST10Y": "10Y"}
+for tk in ["UST2Y", "UST5Y", "UST10Y"]:
+    t = basis_tenors.get(tk)
+    if not t:
+        continue
+    sc = t["score"]
+    basis_bars_html += ('<div class="lpi-factor">'
+        + '<div class="lpi-factor-top"><span class="lpi-factor-lbl">' + tenor_lbls[tk]
+        + ' (AM long ' + "{:.0f}".format(t["am_pct"]) + ' / LF short ' + "{:.0f}".format(t["lev_short_pct"]) + ')</span>'
+        + '<span class="lpi-factor-val" style="color:' + basis_col + '">' + "{:.0f}".format(sc) + '</span></div>'
+        + '<div class="lpi-track"><div class="lpi-fill" style="width:' + "{:.1f}".format(max(0, min(100, sc)))
+        + '%;background:' + basis_col + '"></div></div></div>')
+
+# --- Summary strip ---
+strip_lpi = (s_lpi + " <span style=\"color:" + reg_col + "\">" + reg_dir + "</span>") if lpi_has else "N/A"
+
+j_gex_d = gex_hist_d
+j_gex_v = gex_hist_v
+
+# ---------------------------------------------------------------------------
+# HTML assembly (Part C: three-layer architecture)
+# ---------------------------------------------------------------------------
 parts = []
 parts.append('<!DOCTYPE html>')
 parts.append('<html lang="en"><head>')
@@ -459,7 +1023,16 @@ parts.append('.header-left h1{font-size:16px;font-weight:700}')
 parts.append('.header-left h1 span{color:#6366f1}')
 parts.append('.header-left p{font-size:11px;color:#475569;margin-top:2px}')
 parts.append('.timestamp{font-size:11px;color:#64748b}')
-parts.append('.signal-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:16px 20px}')
+parts.append('.summary-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:14px 20px}')
+parts.append('@media(max-width:600px){.summary-strip{grid-template-columns:1fr}}')
+parts.append('.summary-cell{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:12px 16px}')
+parts.append('.summary-cell .lbl{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.08em}')
+parts.append('.summary-cell .val{font-size:26px;font-weight:800;margin-top:4px;line-height:1}')
+parts.append('.summary-cell .sub{font-size:11px;color:#94a3b8;margin-top:4px}')
+parts.append('.layer-header{margin:24px 20px 12px;padding-bottom:7px;border-bottom:2px solid #2d3748;font-size:15px;font-weight:800;color:#e2e8f0}')
+parts.append('.layer-header span{color:#6366f1;font-size:12px;font-weight:600}')
+parts.append('.layer-header .tf{float:right;font-size:10px;color:#475569;font-weight:500;text-transform:uppercase;letter-spacing:.06em}')
+parts.append('.signal-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:0 20px 16px}')
 parts.append('@media(max-width:900px){.signal-bar{grid-template-columns:repeat(2,1fr)}}')
 parts.append('@media(max-width:480px){.signal-bar{grid-template-columns:1fr}}')
 parts.append('.signal-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px 16px}')
@@ -487,13 +1060,25 @@ parts.append('.lpi-heading span{color:#6366f1}')
 parts.append('.lpi-gauge{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:16px 18px;margin-bottom:12px}')
 parts.append('.lpi-gauge.green{border-left:3px solid #10b981}.lpi-gauge.yellow{border-left:3px solid #f59e0b}')
 parts.append('.lpi-gauge.orange{border-left:3px solid #f97316}.lpi-gauge.red{border-left:3px solid #ef4444}.lpi-gauge.gray{border-left:3px solid #64748b}')
+parts.append('.lpi-gauge.teal{border-left:3px solid #14b8a6}')
 parts.append('.lpi-gauge-top{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}')
 parts.append('.lpi-num{font-size:40px;font-weight:800;line-height:1}')
 parts.append('.lpi-scale{font-size:11px;color:#64748b}')
 parts.append('.lpi-status{font-size:13px;font-weight:600}')
+parts.append('.regime-badge{display:inline-block;font-size:11px;font-weight:700;padding:5px 11px;border-radius:6px;margin-left:auto}')
 parts.append('.lpi-meter{position:relative;height:14px;border-radius:7px;background:linear-gradient(90deg,#10b981 0%,#10b981 40%,#f59e0b 40%,#f59e0b 60%,#f97316 60%,#f97316 80%,#ef4444 80%,#ef4444 100%)}')
 parts.append('.lpi-marker{position:absolute;top:-4px;width:3px;height:22px;background:#e2e8f0;border-radius:2px;box-shadow:0 0 4px rgba(0,0,0,.6);transform:translateX(-50%)}')
 parts.append('.lpi-ticks{display:flex;justify-content:space-between;font-size:9px;color:#475569;margin-top:5px}')
+parts.append('.regime-wrap{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}')
+parts.append('@media(max-width:700px){.regime-wrap{grid-template-columns:1fr}}')
+parts.append('.regime-box{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px 16px}')
+parts.append('.regime-box .rb-title{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}')
+parts.append('.regime-msg{font-size:13px;font-weight:600;margin-bottom:6px}')
+parts.append('.regime-delta{font-size:11px;color:#94a3b8}')
+parts.append('.mtx{display:grid;grid-template-columns:1fr 1fr;gap:6px}')
+parts.append('.mtx-cell{border-radius:7px;padding:9px 10px;min-height:52px}')
+parts.append('.mtx-top{font-size:10px;font-weight:700}')
+parts.append('.mtx-sub{font-size:10px;margin-top:3px;opacity:.85}')
 parts.append('.lpi-factors{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}')
 parts.append('@media(max-width:900px){.lpi-factors{grid-template-columns:repeat(2,1fr)}}')
 parts.append('@media(max-width:480px){.lpi-factors{grid-template-columns:1fr}}')
@@ -503,8 +1088,37 @@ parts.append('.lpi-factor-lbl{font-size:10px;color:#94a3b8;letter-spacing:.03em}
 parts.append('.lpi-factor-val{font-size:18px;font-weight:700}')
 parts.append('.lpi-track{height:6px;border-radius:3px;background:#0a0c10;overflow:hidden}')
 parts.append('.lpi-fill{height:100%;border-radius:3px}')
+parts.append('.tail-wrap{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px 16px;margin-bottom:12px;overflow-x:auto}')
+parts.append('.tail-title{font-size:12px;font-weight:700;color:#e2e8f0;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}')
+parts.append('.tail-readout{font-size:12px;color:#cbd5e1;line-height:1.5;margin-bottom:10px;background:#0f131b;border-left:3px solid #6366f1;padding:8px 11px;border-radius:0 6px 6px 0}')
+parts.append('table.tail{width:100%;border-collapse:collapse;font-size:11px;min-width:640px}')
+parts.append('table.tail th{text-align:right;color:#64748b;font-weight:600;padding:6px 8px;border-bottom:1px solid #2d3748;font-size:10px;text-transform:uppercase;letter-spacing:.03em}')
+parts.append('table.tail th:first-child,table.tail td:first-child{text-align:left}')
+parts.append('table.tail td{text-align:right;padding:6px 8px;border-bottom:1px solid #1a1f2b;color:#cbd5e1}')
+parts.append('table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weight:700}')
+parts.append('.tail-foot{font-size:9px;color:#475569;margin-top:8px;line-height:1.5}')
 parts.append('.lpi-cal{background:#141720;border:1px solid #2d3748;border-radius:8px;padding:12px 14px;font-size:11px;color:#94a3b8;line-height:1.7}')
 parts.append('.lpi-cal b{color:#e2e8f0}.lpi-cal .hot{color:#f97316}.lpi-cal .cool{color:#10b981}')
+parts.append('.cot-section{margin:0 20px 16px}')
+parts.append('.cot-fresh{font-size:10px;color:#10b981;background:rgba(16,185,129,.12);padding:4px 9px;border-radius:5px;display:inline-block;margin-bottom:10px}')
+parts.append('.cot-stale{font-size:10px;color:#f59e0b;background:rgba(245,158,11,.12);padding:4px 9px;border-radius:5px;display:inline-block;margin-bottom:10px}')
+parts.append('.cot-grouplbl{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:6px 0 8px}')
+parts.append('.cot-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px}')
+parts.append('@media(max-width:900px){.cot-cards{grid-template-columns:repeat(2,1fr)}}')
+parts.append('@media(max-width:480px){.cot-cards{grid-template-columns:1fr}}')
+parts.append('.cot-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:13px 15px}')
+parts.append('.cot-card.green{border-left:3px solid #10b981}.cot-card.red{border-left:3px solid #ef4444}')
+parts.append('.cot-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}')
+parts.append('.cot-sym{font-size:13px;font-weight:700;color:#e2e8f0}')
+parts.append('.cot-arrow{font-size:13px}')
+parts.append('.cot-net{font-size:21px;font-weight:800;line-height:1.1}')
+parts.append('.cot-net.green{color:#10b981}.cot-net.red{color:#ef4444}')
+parts.append('.cot-sub{font-size:10px;color:#64748b;margin:3px 0 7px}')
+parts.append('.cot-metrics{display:flex;gap:14px;font-size:10px;color:#94a3b8;margin-bottom:7px}')
+parts.append('.cot-metrics b{color:#e2e8f0}')
+parts.append('.cot-track{height:5px;border-radius:3px;background:#0a0c10;overflow:hidden}')
+parts.append('.cot-fill{height:100%;border-radius:3px}')
+parts.append('.cot-foot{font-size:9px;color:#475569;margin-top:6px}')
 parts.append('.gex-section{margin:0 20px 16px}')
 parts.append('.gex-heading{font-size:13px;font-weight:700;color:#e2e8f0;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}')
 parts.append('.gex-heading span{color:#6366f1}')
@@ -545,12 +1159,139 @@ parts.append('</style></head><body>')
 # header
 parts.append('<div class="header"><div class="header-left">')
 parts.append('<h1>De-Lever Signal Dashboard <span>/ NDX</span></h1>')
-parts.append('<p>5 bottom confirmation signals &middot; auto-updated every hour</p></div>')
+parts.append('<p>3-layer risk stack: fragility · crowding · amplifiers &middot; auto-updated every hour</p></div>')
 parts.append('<div class="header-right"><div class="timestamp">Last updated: ' + now_str + '</div></div></div>')
+
+# summary strip
+parts.append('<div class="summary-strip">')
+parts.append('<div class="summary-cell"><div class="lbl">Fragility · LPI + Regime</div>'
+             + '<div class="val" style="color:' + lpi_col + '">' + strip_lpi + '</div>'
+             + '<div class="sub">' + (reg_msg if lpi_has else "insufficient data") + '</div></div>')
+parts.append('<div class="summary-cell"><div class="lbl">Crowding · Basis-Trade Proxy</div>'
+             + '<div class="val" style="color:' + basis_col + '">' + s_basis + '</div>'
+             + '<div class="sub">' + basis_msg + '</div></div>')
+parts.append('<div class="summary-cell"><div class="lbl">Amplifiers · Signals Confirmed</div>'
+             + '<div class="val" style="color:' + ccol + '">' + str(sig_count) + '/5</div>'
+             + '<div class="sub">' + cmsg + '</div></div>')
+parts.append('</div>')
+
+# ===================== LAYER 1 — FRAGILITY =====================
+parts.append('<div class="layer-header">第一层 · 脆弱度 Fragility <span>Liquidity Pressure Index</span>'
+             + '<span class="tf">weeks–months</span></div>')
+
+parts.append('<div class="lpi-section">')
+
+# gauge card with regime badge
+parts.append('<div class="lpi-gauge ' + reg_cls + '">')
+parts.append('<div class="lpi-gauge-top">')
+parts.append('<span class="lpi-num" style="color:' + lpi_col + '">' + s_lpi + '</span>')
+parts.append('<span class="lpi-scale">/ 100 &middot; ' + lpi_factors_used + '</span>')
+parts.append('<span class="lpi-status" style="color:' + lpi_col + '">' + lpi_status + '</span>')
+if lpi_has:
+    parts.append('<span class="regime-badge" style="background:' + reg_col + ';color:#0d0f14">'
+                 + reg_level + ' &middot; ' + reg_dir + '</span>')
+parts.append('</div>')
+parts.append('<div class="lpi-meter"><div class="lpi-marker" style="left:' + s_lpi_pos + '%"></div></div>')
+parts.append('<div class="lpi-ticks"><span>0 Resilient</span><span>40</span><span>60</span><span>80</span><span>100 Extreme</span></div>')
+parts.append('</div>')
+
+# regime message + 2x2 matrix
+parts.append('<div class="regime-wrap">')
+parts.append('<div class="regime-box"><div class="rb-title">Regime &middot; 状态</div>'
+             + '<div class="regime-msg" style="color:' + reg_col + '">' + reg_msg + '</div>'
+             + '<div class="regime-delta">&Delta;LPI 13w <b style="color:#e2e8f0">' + s_d13
+             + '</b> &middot; &Delta;LPI 4w <b style="color:#e2e8f0">' + s_d4
+             + '</b> &middot; breadth ' + breadth_txt + '</div></div>')
+parts.append('<div class="regime-box"><div class="rb-title">Level × Direction</div>'
+             + '<div class="mtx">' + mtx_html + '</div></div>')
+parts.append('</div>')
+
+# sub-factor bars (with 4w direction arrows)
+parts.append('<div class="lpi-factors">' + lpi_bars + '</div>')
+
+# conditional tail table
+if tail_ok:
+    parts.append('<div class="tail-wrap">')
+    parts.append('<div class="tail-title">Conditional Tail Table &mdash; forward S&amp;P 500 by LPI band</div>')
+    if tail_readout:
+        parts.append('<div class="tail-readout">' + tail_readout + '</div>')
+    parts.append('<table class="tail"><thead><tr>'
+                 + '<th>LPI band</th><th>Horizon</th><th>N</th><th>Mean ret</th><th>Median</th>'
+                 + '<th>Fwd vol (ann.)</th><th>P(&lt;-5%)</th><th>P(&lt;-10%)</th><th>Avg MaxDD</th>'
+                 + '</tr></thead><tbody>' + tail_rows_html + '</tbody></table>')
+    parts.append('<div class="tail-foot">Forward windows overlap weekly, which inflates effective N '
+                 '(observations are not independent). Max drawdown uses weekly closes and therefore '
+                 'understates intraweek troughs. Percentiles feeding each week&rsquo;s LPI are expanding '
+                 'and strictly causal (no look-ahead); forward returns are realized outcomes.</div>')
+    parts.append('</div>')
+else:
+    parts.append('<div class="tail-wrap"><div class="tail-title">Conditional Tail Table</div>'
+                 '<div style="color:#64748b;font-size:11px">Unavailable (S&amp;P 500 or LPI history missing).</div></div>')
+
+# LPI history charts (52w + full reconstructed)
+parts.append('<div class="charts-grid" style="padding:0 0 12px">')
+parts.append('<div class="chart-card"><div class="chart-title">LPI &mdash; Trailing 52 Weeks</div>')
+parts.append('<div class="chart-subtitle">Composite percentile pressure &middot; thresholds at 60 / 80</div>')
+parts.append('<div id="chart-lpi"></div></div>')
+parts.append('<div class="chart-card"><div class="chart-title">LPI &mdash; Full Reconstruction</div>')
+parts.append('<div class="chart-subtitle">' + str(recon_n) + ' weeks from ' + recon_earliest
+             + ' &middot; expanding no-look-ahead percentiles &middot; use range selector</div>')
+parts.append('<div id="chart-lpi-full"></div></div>')
+parts.append('</div>')
+
+# stress calendar
+parts.append('<div class="lpi-cal">')
+parts.append('<b>2026 H2 压力日历 (projected stress calendar)</b><br>')
+parts.append('<span class="hot">Sep (~79th pct):</span> FOMC Sep 15-16 &middot; corp estimated tax Sep 15 &middot; quarter-end TGA refill Sep 30 &mdash; 4 simultaneous drains<br>')
+parts.append('<span class="hot">Nov (2nd highest):</span> quarterly refunding issuance + FOMC late Oct<br>')
+parts.append('<span class="hot">Aug (3rd):</span> refunding settlement peak mid-August<br>')
+parts.append('<span class="cool">Jul:</span> lowest pressure month of H2')
+parts.append('</div>')
+
+parts.append('</div>')  # lpi-section
+
+# ===================== LAYER 2 — CROWDING =====================
+parts.append('<div class="layer-header">第二层 · 拥挤度 Crowding <span>CFTC COT positioning</span>'
+             + '<span class="tf">weeks</span></div>')
+parts.append('<div class="cot-section">')
+parts.append('<div class="' + fresh_cls + '">COT ' + fresh_txt + '</div>')
+
+if cot_ok:
+    if cot_equity_html:
+        parts.append('<div class="cot-grouplbl">Equity index &middot; Leveraged Funds net</div>')
+        parts.append('<div class="cot-cards">' + cot_equity_html + '</div>')
+    if cot_rates_html:
+        parts.append('<div class="cot-grouplbl">Treasury notes &middot; Leveraged Funds net (basis-trade legs)</div>')
+        parts.append('<div class="cot-cards">' + cot_rates_html + '</div>')
+    if cot_ctx_html:
+        parts.append('<div class="cot-grouplbl">Context &middot; Managed Money / lev net</div>')
+        parts.append('<div class="cot-cards">' + cot_ctx_html + '</div>')
+else:
+    parts.append('<div class="gex-note-box">COT data unavailable this run (CFTC outage) '
+                 '&mdash; crowding layer degraded, other layers unaffected.</div>')
+
+# basis-trade proxy gauge
+parts.append('<div class="lpi-gauge" style="border-left:3px solid ' + basis_col + '">')
+parts.append('<div class="lpi-gauge-top">')
+parts.append('<span class="lpi-num" style="color:' + basis_col + '">' + s_basis + '</span>')
+parts.append('<span class="lpi-scale">/ 100 &middot; basis-trade proxy 基差交易拥挤度</span>')
+parts.append('<span class="lpi-status" style="color:' + basis_col + '">' + basis_msg + '</span></div>')
+parts.append('<div class="lpi-meter"><div class="lpi-marker" style="left:' + s_basis_pos + '%"></div></div>')
+parts.append('<div class="lpi-ticks"><span>0 Benign</span><span>40</span><span>60</span><span>80 Crowded</span><span>100</span></div>')
+if basis_bars_html:
+    parts.append('<div class="lpi-factors" style="margin-top:12px;margin-bottom:0">' + basis_bars_html + '</div>')
+parts.append('<div class="tail-foot">Proxy = mean over 2y/5y/10y of [pctile(Asset-Mgr net long) + pctile(Lev-Fund net short)] / 2, '
+             'measuring how extreme the AM-long / LF-short configuration is vs its own history. Not added to the 4-factor LPI '
+             'composite (a 5-factor variant is a future option).</div>')
+parts.append('</div>')
+parts.append('</div>')  # cot-section
+
+# ===================== LAYER 3 — AMPLIFIERS & TRIGGERS =====================
+parts.append('<div class="layer-header">第三层 · 放大器与触发器 Amplifiers &amp; Triggers '
+             + '<span>de-lever bottom signals + dealer gamma</span><span class="tf">hours–days</span></div>')
 
 # signal bar
 parts.append('<div class="signal-bar">')
-
 parts.append('<div class="signal-card ' + cls_vix + '">')
 parts.append('<div class="signal-label">&#9312; VIX Term Structure</div>')
 parts.append('<div class="signal-value ' + cls_vix + '">' + s_vdiff + ' pts</div>')
@@ -574,7 +1315,6 @@ parts.append('<div class="signal-label">&#9315; Cross-Sector Correlation</div>')
 parts.append('<div class="signal-value ' + cls_cor + '">' + s_c2w + '</div>')
 parts.append('<div class="signal-sub">2W vs 1M avg: ' + s_c1m + ' &rarr; ' + s_c2w + '</div>')
 parts.append('<div class="signal-badge ' + bdg_cor + '">' + txt_cor + '</div></div>')
-
 parts.append('</div>')
 
 # confirm counter
@@ -584,41 +1324,7 @@ parts.append('<div class="confirm-dots">' + dots + '</div>')
 parts.append('<div class="confirm-text"><strong>' + str(sig_count) + '/5</strong> &mdash; <span style="color:' + ccol + '">' + cmsg + '</span></div>')
 parts.append('</div>')
 
-# LPI section
-parts.append('<div class="lpi-section">')
-parts.append('<div class="lpi-heading">流动性压力指数 <span>(Liquidity Pressure Index)</span></div>')
-
-# gauge card
-parts.append('<div class="lpi-gauge ' + lpi_cls + '">')
-parts.append('<div class="lpi-gauge-top">')
-parts.append('<span class="lpi-num" style="color:' + lpi_col + '">' + s_lpi + '</span>')
-parts.append('<span class="lpi-scale">/ 100 &middot; ' + lpi_factors_used + '</span>')
-parts.append('<span class="lpi-status" style="color:' + lpi_col + '">' + lpi_status + '</span></div>')
-parts.append('<div class="lpi-meter"><div class="lpi-marker" style="left:' + s_lpi_pos + '%"></div></div>')
-parts.append('<div class="lpi-ticks"><span>0 Resilient</span><span>40</span><span>60</span><span>80</span><span>100 Extreme</span></div>')
-parts.append('</div>')
-
-# sub-factor bars
-parts.append('<div class="lpi-factors">' + lpi_bars + '</div>')
-
-# 52-week history chart
-parts.append('<div class="chart-card" style="margin-bottom:12px">')
-parts.append('<div class="chart-title">LPI &mdash; Trailing 52 Weeks</div>')
-parts.append('<div class="chart-subtitle">Composite percentile pressure &middot; thresholds at 60 (elevated) / 80 (extreme)</div>')
-parts.append('<div id="chart-lpi"></div></div>')
-
-# stress calendar
-parts.append('<div class="lpi-cal">')
-parts.append('<b>2026 H2 压力日历 (projected stress calendar)</b><br>')
-parts.append('<span class="hot">Sep (~79th pct):</span> FOMC Sep 15-16 &middot; corp estimated tax Sep 15 &middot; quarter-end TGA refill Sep 30 &mdash; 4 simultaneous drains<br>')
-parts.append('<span class="hot">Nov (2nd highest):</span> quarterly refunding issuance + FOMC late Oct<br>')
-parts.append('<span class="hot">Aug (3rd):</span> refunding settlement peak mid-August<br>')
-parts.append('<span class="cool">Jul:</span> lowest pressure month of H2')
-parts.append('</div>')
-
-parts.append('</div>')
-
-# GEX Monitor section (between LPI and charts grid)
+# GEX Monitor section
 parts.append(gex_section_html)
 
 # charts grid
@@ -635,10 +1341,10 @@ parts.append('</div>')
 
 # bottom bar
 parts.append('<div class="bottom-bar">')
-parts.append('<div class="bottom-item">VIX: <span>CBOE via Yahoo Finance</span></div>')
+parts.append('<div class="bottom-item">LPI: <span>FRED (WALCL/WTREGEN/RRPONTSYD/SOFR/DFF) + FiscalData + Yahoo VIX</span></div>')
+parts.append('<div class="bottom-item">Tail table: <span>Yahoo ^GSPC weekly</span></div>')
+parts.append('<div class="bottom-item">COT: <span>CFTC Socrata TFF + Disaggregated</span></div>')
 parts.append('<div class="bottom-item">Funding: <span>Binance (CoinGecko) + OKX API</span></div>')
-parts.append('<div class="bottom-item">COT: <span>CFTC Disaggregated (~3-day lag)</span></div>')
-parts.append('<div class="bottom-item">Correlation: <span>Sector ETFs XLK-XLRE</span></div>')
 parts.append('<div class="bottom-item">GEX: <span>FlashAlpha free tier (NVDA/AAPL/AMD/MU, 5 req/day)</span></div>')
 parts.append('</div>')
 
@@ -665,20 +1371,31 @@ parts.append('   yaxis:{gridcolor:"#1e2433",tickfont:{size:9},range:[0,' + s_yma
 parts.append('   margin:{l:30,r:8,t:28,b:36},showlegend:false,height:190,autosize:true},CFG);')
 parts.append('var cotColors=' + j_cv + '.map(function(v){return v>=0?"#10b981":"#ef4444";});')
 parts.append('var zeroLine={type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}};')
-parts.append('Plotly.newPlot("chart-cot",[{x:' + j_cd + ',y:' + j_cv + ',type:"bar",marker:{color:cotColors}}],')
-parts.append('  Object.assign({},T,{shapes:[zeroLine],xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);')
+parts.append('if(' + j_cd + '.length){Plotly.newPlot("chart-cot",[{x:' + j_cd + ',y:' + j_cv + ',type:"bar",marker:{color:cotColors}}],')
+parts.append('  Object.assign({},T,{shapes:[zeroLine],xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);}')
 parts.append('Plotly.newPlot("chart-corr",[')
 parts.append('  {x:' + j_rd + ',y:' + j_rh + ',type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"},')
 parts.append('  {x:' + j_rd + ',y:' + j_rf + ',type:"scatter",mode:"lines",line:{color:"#ef4444",width:1,dash:"dash"}}')
 parts.append('],Object.assign({},T,{showlegend:false}),CFG);')
+parts.append('var t60={type:"line",x0:0,x1:1,xref:"paper",y0:60,y1:60,line:{color:"#f97316",width:1,dash:"dash"}};')
+parts.append('var t80={type:"line",x0:0,x1:1,xref:"paper",y0:80,y1:80,line:{color:"#ef4444",width:1,dash:"dash"}};')
 parts.append('var lpiD=' + j_lpi_d + ',lpiV=' + j_lpi_v + ';')
 parts.append('if(lpiD.length){')
-parts.append('  var t60={type:"line",x0:0,x1:1,xref:"paper",y0:60,y1:60,line:{color:"#f97316",width:1,dash:"dash"}};')
-parts.append('  var t80={type:"line",x0:0,x1:1,xref:"paper",y0:80,y1:80,line:{color:"#ef4444",width:1,dash:"dash"}};')
 parts.append('  Plotly.newPlot("chart-lpi",[{x:lpiD,y:lpiV,type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.08)"}],')
 parts.append('    Object.assign({},T,{shapes:[t60,t80],yaxis:Object.assign({},T.yaxis,{range:[0,100]})}),CFG);')
 parts.append('}else{document.getElementById("chart-lpi").innerHTML="<div style=\\"color:#64748b;font-size:11px;padding:20px 0\\">History unavailable</div>";}')
-parts.append('var gexD=' + gex_hist_d + ',gexV=' + gex_hist_v + ';')
+parts.append('var lpiFD=' + j_lpi_fd + ',lpiFV=' + j_lpi_fv + ';')
+parts.append('if(lpiFD.length){')
+parts.append('  var Tf=Object.assign({},T,{shapes:[t60,t80],yaxis:Object.assign({},T.yaxis,{range:[0,100]}),')
+parts.append('    xaxis:Object.assign({},T.xaxis,{fixedrange:false,rangeselector:{buttons:[')
+parts.append('      {count:1,label:"1y",step:"year",stepmode:"backward"},')
+parts.append('      {count:3,label:"3y",step:"year",stepmode:"backward"},')
+parts.append('      {count:5,label:"5y",step:"year",stepmode:"backward"},')
+parts.append('      {step:"all",label:"all"}],font:{size:9,color:"#94a3b8"},bgcolor:"#1e2433",activecolor:"#6366f1"},')
+parts.append('    rangeslider:{visible:false}})});')
+parts.append('  Plotly.newPlot("chart-lpi-full",[{x:lpiFD,y:lpiFV,type:"scatter",mode:"lines",line:{color:"#8b5cf6",width:1.5},fill:"tozeroy",fillcolor:"rgba(139,92,246,0.08)"}],Tf,CFG);')
+parts.append('}else{var ef=document.getElementById("chart-lpi-full");if(ef)ef.innerHTML="<div style=\\"color:#64748b;font-size:11px;padding:20px 0\\">History unavailable</div>";}')
+parts.append('var gexD=' + j_gex_d + ',gexV=' + j_gex_v + ';')
 parts.append('var gexEl=document.getElementById("chart-gex-nvda");')
 parts.append('if(gexEl&&gexD.length>=2){')
 parts.append('  var gexColors=gexV.map(function(v){return v>=0?"#10b981":"#ef4444";});')
@@ -688,7 +1405,7 @@ parts.append('    line:{color:"#6366f1",width:2},marker:{color:gexColors,size:5}
 parts.append('    Object.assign({},T,{shapes:[gexZero],yaxis:Object.assign({},T.yaxis,{title:{text:"$M",font:{size:9}}}),xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);')
 parts.append('}')
 parts.append('window.addEventListener("resize",function(){')
-parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-gex-nvda"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
+parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
 parts.append('});')
 parts.append('})();')
 parts.append('</script></body></html>')
@@ -698,4 +1415,5 @@ out = "\n".join(parts)
 with open("index.html", "w", encoding="utf-8") as f:
     f.write(out)
 
-print("Done. chars={} signals={}/5".format(len(out), sig_count))
+print("Done. chars={} signals={}/5 LPI={} regime={}/{} basis={}".format(
+    len(out), sig_count, s_lpi, reg_level, reg_dir, s_basis))
