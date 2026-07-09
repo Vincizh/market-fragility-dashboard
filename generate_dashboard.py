@@ -887,7 +887,7 @@ if tail_ok:
                 + '<td>' + str(st["n"]) + '</td>'
                 + '<td>' + _pct(st["mean_ret"] * 100) + '</td>'
                 + '<td>' + _pct(st["med_ret"] * 100) + '</td>'
-                + '<td>' + _pctu(st["vol"]) + '</td>'
+                + '<td>' + _pctu(st["vol"] * 100.0) + '</td>'
                 + '<td>' + _pctu(st["p5"]) + '</td>'
                 + '<td>' + _pctu(st["p10"]) + '</td>'
                 + '<td>' + _pct(st["avg_dd"]) + '</td>'
@@ -945,7 +945,8 @@ def _cot_card(m):
     p.append('<div class="cot-card-head"><span class="cot-sym">' + m["label"] + '</span>'
              + '<span class="cot-arrow" style="color:' + acol + '">' + arrow + '</span></div>')
     p.append('<div class="cot-net ' + cls + '">' + "{:+,}".format(int(net)) + '</div>')
-    p.append('<div class="cot-sub">lev net contracts · 4w '
+    net_lbl = "MM net contracts" if m.get("kind") == "dis" else "lev net contracts"
+    p.append('<div class="cot-sub">' + net_lbl + ' · 4w '
              + ("{:+,}".format(int(chg)) if chg == chg else "N/A") + '</div>')
     p.append('<div class="cot-metrics"><span>pctile <b>' + ("{:.0f}".format(pct) if pct == pct else "N/A")
              + '</b></span><span>z <b>' + ("{:+.1f}".format(z) if z == z else "N/A") + '</b></span></div>')
