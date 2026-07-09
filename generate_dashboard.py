@@ -253,20 +253,46 @@ except Exception as e:
     lpi_ok["vol_amplifier"] = False
     print("LPI vol_amplifier error:", e)
 
-# Optional GEX annotation via FlashAlpha (never allowed to break LPI)
-gex_note = ""
+# --- GEX Monitor (Phase 2b, FlashAlpha free tier) ---------------------------
+# SPX GEX is tier-restricted on the free plan (and a 403 still burns a quota
+# slot), so the old direct-SPX call is gone. We fetch <=5 single-stock readings
+# per day on a UTC-hour schedule and repoint the Phase-1 GEX signal to NVDA.
+# State survives between hourly CI runs via a JSON block embedded in index.html
+# (the workflow commits only index.html, so a side-car file would be dropped).
+print("Running GEX monitor...")
+import gex_monitor
+
 try:
-    fa_key = os.environ.get("FLASHALPHA_API_KEY")
-    if fa_key:
-        gr = requests.get("https://lab.flashalpha.com/v1/exposure/gex/SPX",
-                          headers={"X-API-KEY": fa_key}, timeout=15).json()
-        net_gex = gr.get("net_gex", gr.get("netGex"))
-        if net_gex is not None:
-            net_gex = float(net_gex)
-            gex_note = "Net GEX {:+.2f}B ({})".format(net_gex / 1e9, "negative = amplifying" if net_gex < 0 else "positive = dampening")
-            print("LPI GEX:", gex_note)
+    with open("index.html", "r", encoding="utf-8") as _f:
+        _prev_html = _f.read()
+except Exception:
+    _prev_html = ""
+
+gex_now = datetime.now(timezone.utc)
+gex_key = os.environ.get("FLASHALPHA_API_KEY")
+try:
+    gex_state, gex_meta = gex_monitor.run_gex_update(gex_now, _prev_html, gex_key)
 except Exception as e:
-    print("LPI GEX (optional) error:", e)
+    print("GEX monitor error (non-fatal):", e)
+    gex_state, gex_meta = gex_monitor.default_state(), {
+        "fetched": None, "status": "error", "expiration": "",
+        "fresh": set(), "api_key": bool(gex_key)}
+
+gex_nvda = gex_monitor.nvda_proxy(gex_state)
+gex_section_html = gex_monitor.render_section(gex_state, gex_meta, gex_now)
+gex_hist_d, gex_hist_v = gex_monitor.nvda_history_json(gex_state)
+print("GEX monitor: fetched={} status={} used={}/{} nvda_has={} excluded={}".format(
+    gex_meta.get("fetched"), gex_meta.get("status"),
+    gex_state["daily"]["count"], gex_monitor.GEX_DAILY_LIMIT,
+    gex_nvda["has"], gex_state.get("excluded")))
+
+# Phase-1 GEX proxy note (NVDA; SPX unavailable on free tier)
+if gex_nvda["has"]:
+    gex_note = "NVDA net GEX {} ({})".format(
+        gex_monitor.fmt_gex(gex_nvda["net_gex"]),
+        "negative = amplifying" if not gex_nvda["positive"] else "positive = dampening")
+else:
+    gex_note = ""
 
 # Composite: average of available factor percentiles (current reading = last value)
 lpi_labels = {
@@ -394,11 +420,16 @@ for k in lpi_order:
         wpct = "{:.1f}".format(max(0.0, min(100.0, v)))
     else:
         bcol, vtxt, wpct = "#64748b", "N/A", "0"
+    amp_badge = ""
+    if k == "vol_amplifier" and gex_nvda["has"] and not gex_nvda["positive"]:
+        amp_badge = ('<div class="lpi-amp-badge">NVDA negative gamma — '
+                     'shock amplification regime</div>')
     lpi_bars = (lpi_bars
         + '<div class="lpi-factor">'
         + '<div class="lpi-factor-top"><span class="lpi-factor-lbl">' + lbl + '</span>'
         + '<span class="lpi-factor-val" style="color:' + bcol + '">' + vtxt + '</span></div>'
         + '<div class="lpi-track"><div class="lpi-fill" style="width:' + wpct + '%;background:' + bcol + '"></div></div>'
+        + amp_badge
         + '</div>')
 
 # raw-reading footnote strings
@@ -474,6 +505,34 @@ parts.append('.lpi-track{height:6px;border-radius:3px;background:#0a0c10;overflo
 parts.append('.lpi-fill{height:100%;border-radius:3px}')
 parts.append('.lpi-cal{background:#141720;border:1px solid #2d3748;border-radius:8px;padding:12px 14px;font-size:11px;color:#94a3b8;line-height:1.7}')
 parts.append('.lpi-cal b{color:#e2e8f0}.lpi-cal .hot{color:#f97316}.lpi-cal .cool{color:#10b981}')
+parts.append('.gex-section{margin:0 20px 16px}')
+parts.append('.gex-heading{font-size:13px;font-weight:700;color:#e2e8f0;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}')
+parts.append('.gex-heading span{color:#6366f1}')
+parts.append('.gex-note-box{background:#141720;border:1px solid #2d3748;border-radius:8px;padding:14px 16px;font-size:12px;color:#94a3b8}')
+parts.append('.gex-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}')
+parts.append('@media(max-width:900px){.gex-cards{grid-template-columns:repeat(2,1fr)}}')
+parts.append('@media(max-width:480px){.gex-cards{grid-template-columns:1fr}}')
+parts.append('.gex-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:13px 15px}')
+parts.append('.gex-card.green{border-left:3px solid #10b981}.gex-card.red{border-left:3px solid #ef4444}.gex-card.gray{border-left:3px solid #64748b}')
+parts.append('.gex-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}')
+parts.append('.gex-card-sym{font-size:14px;font-weight:700;color:#e2e8f0}')
+parts.append('.gex-fresh{font-size:9px;color:#10b981;background:rgba(16,185,129,.12);padding:2px 6px;border-radius:4px}')
+parts.append('.gex-cached{font-size:9px;color:#f59e0b}')
+parts.append('.gex-card-val{font-size:22px;font-weight:800;line-height:1.1}')
+parts.append('.gex-card-val.green{color:#10b981}.gex-card-val.red{color:#ef4444}')
+parts.append('.gex-card-na{font-size:22px;font-weight:800;color:#64748b}')
+parts.append('.gex-card-lbl{font-size:10px;color:#64748b;margin:3px 0 8px}')
+parts.append('.gex-flip-txt{font-size:10px;color:#94a3b8;margin-bottom:5px}')
+parts.append('.gex-flip-txt .green{color:#10b981}.gex-flip-txt .red{color:#ef4444}')
+parts.append('.gex-flip-track{position:relative;height:8px;border-radius:4px;background:linear-gradient(90deg,#ef4444 0%,#ef4444 48%,#334155 48%,#334155 52%,#10b981 52%,#10b981 100%)}')
+parts.append('.gex-flip-mid{position:absolute;left:50%;top:-2px;width:1px;height:12px;background:#64748b;transform:translateX(-50%)}')
+parts.append('.gex-flip-marker{position:absolute;top:-3px;width:4px;height:14px;border-radius:2px;transform:translateX(-50%)}')
+parts.append('.gex-flip-marker.green{background:#10b981}.gex-flip-marker.red{background:#ef4444}')
+parts.append('.gex-card-foot{font-size:9px;color:#475569;margin-top:7px}')
+parts.append('.gex-card-note{font-size:9px;color:#f59e0b;margin-top:4px}')
+parts.append('.gex-quota{font-size:10px;color:#64748b;background:#141720;border:1px solid #2d3748;border-radius:8px;padding:9px 13px}')
+parts.append('.gex-quota b{color:#94a3b8}.gex-quota .red{color:#ef4444}.gex-quota .green{color:#10b981}.gex-quota .gray{color:#64748b}')
+parts.append('.lpi-amp-badge{display:inline-block;font-size:9px;font-weight:600;color:#ef4444;background:rgba(239,68,68,.15);padding:2px 7px;border-radius:4px;margin-top:6px}')
 parts.append('.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 20px 16px}')
 parts.append('@media(max-width:700px){.charts-grid{grid-template-columns:1fr}}')
 parts.append('.chart-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px;min-width:0}')
@@ -559,6 +618,9 @@ parts.append('</div>')
 
 parts.append('</div>')
 
+# GEX Monitor section (between LPI and charts grid)
+parts.append(gex_section_html)
+
 # charts grid
 parts.append('<div class="charts-grid">')
 parts.append('<div class="chart-card"><div class="chart-title">VIX 30-Day History</div>')
@@ -577,7 +639,7 @@ parts.append('<div class="bottom-item">VIX: <span>CBOE via Yahoo Finance</span><
 parts.append('<div class="bottom-item">Funding: <span>Binance (CoinGecko) + OKX API</span></div>')
 parts.append('<div class="bottom-item">COT: <span>CFTC Disaggregated (~3-day lag)</span></div>')
 parts.append('<div class="bottom-item">Correlation: <span>Sector ETFs XLK-XLRE</span></div>')
-parts.append('<div class="bottom-item">GEX: <span>Requires SpotGamma/SqueezeMetrics</span></div>')
+parts.append('<div class="bottom-item">GEX: <span>FlashAlpha free tier (NVDA/AAPL/AMD/MU, 5 req/day)</span></div>')
 parts.append('</div>')
 
 # JS
@@ -616,8 +678,17 @@ parts.append('  var t80={type:"line",x0:0,x1:1,xref:"paper",y0:80,y1:80,line:{co
 parts.append('  Plotly.newPlot("chart-lpi",[{x:lpiD,y:lpiV,type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.08)"}],')
 parts.append('    Object.assign({},T,{shapes:[t60,t80],yaxis:Object.assign({},T.yaxis,{range:[0,100]})}),CFG);')
 parts.append('}else{document.getElementById("chart-lpi").innerHTML="<div style=\\"color:#64748b;font-size:11px;padding:20px 0\\">History unavailable</div>";}')
+parts.append('var gexD=' + gex_hist_d + ',gexV=' + gex_hist_v + ';')
+parts.append('var gexEl=document.getElementById("chart-gex-nvda");')
+parts.append('if(gexEl&&gexD.length>=2){')
+parts.append('  var gexColors=gexV.map(function(v){return v>=0?"#10b981":"#ef4444";});')
+parts.append('  var gexZero={type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}};')
+parts.append('  Plotly.newPlot("chart-gex-nvda",[{x:gexD,y:gexV,type:"scatter",mode:"lines+markers",')
+parts.append('    line:{color:"#6366f1",width:2},marker:{color:gexColors,size:5},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"}],')
+parts.append('    Object.assign({},T,{shapes:[gexZero],yaxis:Object.assign({},T.yaxis,{title:{text:"$M",font:{size:9}}}),xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);')
+parts.append('}')
 parts.append('window.addEventListener("resize",function(){')
-parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
+parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-gex-nvda"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
 parts.append('});')
 parts.append('})();')
 parts.append('</script></body></html>')

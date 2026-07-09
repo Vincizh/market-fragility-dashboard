@@ -58,6 +58,34 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 .lpi-fill{height:100%;border-radius:3px}
 .lpi-cal{background:#141720;border:1px solid #2d3748;border-radius:8px;padding:12px 14px;font-size:11px;color:#94a3b8;line-height:1.7}
 .lpi-cal b{color:#e2e8f0}.lpi-cal .hot{color:#f97316}.lpi-cal .cool{color:#10b981}
+.gex-section{margin:0 20px 16px}
+.gex-heading{font-size:13px;font-weight:700;color:#e2e8f0;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}
+.gex-heading span{color:#6366f1}
+.gex-note-box{background:#141720;border:1px solid #2d3748;border-radius:8px;padding:14px 16px;font-size:12px;color:#94a3b8}
+.gex-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}
+@media(max-width:900px){.gex-cards{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){.gex-cards{grid-template-columns:1fr}}
+.gex-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:13px 15px}
+.gex-card.green{border-left:3px solid #10b981}.gex-card.red{border-left:3px solid #ef4444}.gex-card.gray{border-left:3px solid #64748b}
+.gex-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.gex-card-sym{font-size:14px;font-weight:700;color:#e2e8f0}
+.gex-fresh{font-size:9px;color:#10b981;background:rgba(16,185,129,.12);padding:2px 6px;border-radius:4px}
+.gex-cached{font-size:9px;color:#f59e0b}
+.gex-card-val{font-size:22px;font-weight:800;line-height:1.1}
+.gex-card-val.green{color:#10b981}.gex-card-val.red{color:#ef4444}
+.gex-card-na{font-size:22px;font-weight:800;color:#64748b}
+.gex-card-lbl{font-size:10px;color:#64748b;margin:3px 0 8px}
+.gex-flip-txt{font-size:10px;color:#94a3b8;margin-bottom:5px}
+.gex-flip-txt .green{color:#10b981}.gex-flip-txt .red{color:#ef4444}
+.gex-flip-track{position:relative;height:8px;border-radius:4px;background:linear-gradient(90deg,#ef4444 0%,#ef4444 48%,#334155 48%,#334155 52%,#10b981 52%,#10b981 100%)}
+.gex-flip-mid{position:absolute;left:50%;top:-2px;width:1px;height:12px;background:#64748b;transform:translateX(-50%)}
+.gex-flip-marker{position:absolute;top:-3px;width:4px;height:14px;border-radius:2px;transform:translateX(-50%)}
+.gex-flip-marker.green{background:#10b981}.gex-flip-marker.red{background:#ef4444}
+.gex-card-foot{font-size:9px;color:#475569;margin-top:7px}
+.gex-card-note{font-size:9px;color:#f59e0b;margin-top:4px}
+.gex-quota{font-size:10px;color:#64748b;background:#141720;border:1px solid #2d3748;border-radius:8px;padding:9px 13px}
+.gex-quota b{color:#94a3b8}.gex-quota .red{color:#ef4444}.gex-quota .green{color:#10b981}.gex-quota .gray{color:#64748b}
+.lpi-amp-badge{display:inline-block;font-size:9px;font-weight:600;color:#ef4444;background:rgba(239,68,68,.15);padding:2px 7px;border-radius:4px;margin-top:6px}
 .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 20px 16px}
 @media(max-width:700px){.charts-grid{grid-template-columns:1fr}}
 .chart-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px;min-width:0}
@@ -69,7 +97,7 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 <div class="header"><div class="header-left">
 <h1>De-Lever Signal Dashboard <span>/ NDX</span></h1>
 <p>5 bottom confirmation signals &middot; auto-updated every hour</p></div>
-<div class="header-right"><div class="timestamp">Last updated: 2026-07-09 04:04 UTC</div></div></div>
+<div class="header-right"><div class="timestamp">Last updated: 2026-07-09 04:43 UTC</div></div></div>
 <div class="signal-bar">
 <div class="signal-card green">
 <div class="signal-label">&#9312; VIX Term Structure</div>
@@ -78,8 +106,8 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 <div class="signal-badge badge-green">CONTANGO ✅</div></div>
 <div class="signal-card green">
 <div class="signal-label">&#9313; Crypto Funding (Binance)</div>
-<div class="signal-value green">BTC +0.2947%</div>
-<div class="signal-sub">ETH +0.5332% &middot; OKX BTC +0.0022%</div>
+<div class="signal-value green">BTC +0.3022%</div>
+<div class="signal-sub">ETH +0.5894% &middot; OKX BTC +0.0012%</div>
 <div class="signal-badge badge-green">BOTH POSITIVE ✅ — Risk appetite returning</div></div>
 <div class="signal-card red">
 <div class="signal-label">&#9314; CTA Proxy (CFTC COT)</div>
@@ -99,15 +127,15 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 </div>
 <div class="lpi-section">
 <div class="lpi-heading">流动性压力指数 <span>(Liquidity Pressure Index)</span></div>
-<div class="lpi-gauge orange">
+<div class="lpi-gauge yellow">
 <div class="lpi-gauge-top">
-<span class="lpi-num" style="color:#f97316">60.1</span>
+<span class="lpi-num" style="color:#f59e0b">55.6</span>
 <span class="lpi-scale">/ 100 &middot; 4/4 factors</span>
-<span class="lpi-status" style="color:#f97316">Elevated / Reduce leverage, widen hedges 偏高</span></div>
-<div class="lpi-meter"><div class="lpi-marker" style="left:60.1%"></div></div>
+<span class="lpi-status" style="color:#f59e0b">Neutral / Watch for inflection 中性</span></div>
+<div class="lpi-meter"><div class="lpi-marker" style="left:55.6%"></div></div>
 <div class="lpi-ticks"><span>0 Resilient</span><span>40</span><span>60</span><span>80</span><span>100 Extreme</span></div>
 </div>
-<div class="lpi-factors"><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Short Rate 资金价格</span><span class="lpi-factor-val" style="color:#f97316">67</span></div><div class="lpi-track"><div class="lpi-fill" style="width:67.0%;background:#f97316"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Duration Supply 久期供给</span><span class="lpi-factor-val" style="color:#f97316">76</span></div><div class="lpi-track"><div class="lpi-fill" style="width:76.4%;background:#f97316"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Net Liquidity 银行水位 (inv)</span><span class="lpi-factor-val" style="color:#f59e0b">44</span></div><div class="lpi-track"><div class="lpi-fill" style="width:44.1%;background:#f59e0b"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Vol Amplifier 波动放大器</span><span class="lpi-factor-val" style="color:#f59e0b">53</span></div><div class="lpi-track"><div class="lpi-fill" style="width:52.9%;background:#f59e0b"></div></div></div></div>
+<div class="lpi-factors"><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Short Rate 资金价格</span><span class="lpi-factor-val" style="color:#f97316">67</span></div><div class="lpi-track"><div class="lpi-fill" style="width:67.0%;background:#f97316"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Duration Supply 久期供给</span><span class="lpi-factor-val" style="color:#f59e0b">59</span></div><div class="lpi-track"><div class="lpi-fill" style="width:58.7%;background:#f59e0b"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Net Liquidity 银行水位 (inv)</span><span class="lpi-factor-val" style="color:#f59e0b">44</span></div><div class="lpi-track"><div class="lpi-fill" style="width:44.1%;background:#f59e0b"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Vol Amplifier 波动放大器</span><span class="lpi-factor-val" style="color:#f59e0b">53</span></div><div class="lpi-track"><div class="lpi-fill" style="width:52.9%;background:#f59e0b"></div></div></div></div>
 <div class="chart-card" style="margin-bottom:12px">
 <div class="chart-title">LPI &mdash; Trailing 52 Weeks</div>
 <div class="chart-subtitle">Composite percentile pressure &middot; thresholds at 60 (elevated) / 80 (extreme)</div>
@@ -120,6 +148,11 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 <span class="cool">Jul:</span> lowest pressure month of H2
 </div>
 </div>
+<div class="gex-section">
+<div class="gex-heading">GEX Monitor <span>做市商伽马监控 (Dealer Gamma)</span></div>
+<div class="gex-note-box">FlashAlpha API key not configured &mdash; GEX monitor idle. Set <b>FLASHALPHA_API_KEY</b> to enable.</div>
+</div>
+<script id="gex-state" type="application/json">{"history":[],"excluded":[],"cards":{},"daily":{"date":"2026-07-09","count":0,"hours":[]}}</script>
 <div class="charts-grid">
 <div class="chart-card"><div class="chart-title">VIX 30-Day History</div>
 <div class="chart-subtitle">Spot VIX above 20 = elevated fear regime</div><div id="chart-vix"></div></div>
@@ -135,7 +168,7 @@ body{background:#0d0f14;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFo
 <div class="bottom-item">Funding: <span>Binance (CoinGecko) + OKX API</span></div>
 <div class="bottom-item">COT: <span>CFTC Disaggregated (~3-day lag)</span></div>
 <div class="bottom-item">Correlation: <span>Sector ETFs XLK-XLRE</span></div>
-<div class="bottom-item">GEX: <span>Requires SpotGamma/SqueezeMetrics</span></div>
+<div class="bottom-item">GEX: <span>FlashAlpha free tier (NVDA/AAPL/AMD/MU, 5 req/day)</span></div>
 </div>
 <script>
 (function(){
@@ -165,15 +198,24 @@ Plotly.newPlot("chart-corr",[
   {x:["2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07", "2026-07-08"],y:[0.1513, 0.162, 0.1756, 0.1721, 0.1401, 0.1985, 0.2042, 0.1934, 0.1785, 0.171, 0.1702, 0.1688, 0.1604, 0.1527, 0.1375, 0.1575, 0.1541, 0.1434, 0.1569],type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"},
   {x:["2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07", "2026-07-08"],y:[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],type:"scatter",mode:"lines",line:{color:"#ef4444",width:1,dash:"dash"}}
 ],Object.assign({},T,{showlegend:false}),CFG);
-var lpiD=["2025-07-11", "2025-07-18", "2025-07-25", "2025-08-01", "2025-08-08", "2025-08-15", "2025-08-22", "2025-08-29", "2025-09-05", "2025-09-12", "2025-09-19", "2025-09-26", "2025-10-03", "2025-10-10", "2025-10-17", "2025-10-24", "2025-10-31", "2025-11-07", "2025-11-14", "2025-11-21", "2025-11-28", "2025-12-05", "2025-12-12", "2025-12-19", "2025-12-26", "2026-01-02", "2026-01-09", "2026-01-16", "2026-01-23", "2026-01-30", "2026-02-06", "2026-02-13", "2026-02-20", "2026-02-27", "2026-03-06", "2026-03-13", "2026-03-20", "2026-03-27", "2026-04-03", "2026-04-10", "2026-04-17", "2026-04-24", "2026-05-01", "2026-05-08", "2026-05-15", "2026-05-22", "2026-05-29", "2026-06-05", "2026-06-12", "2026-06-19", "2026-06-26", "2026-07-03"],lpiV=[61.2, 61.0, 40.4, 69.4, 64.5, 65.0, 63.4, 64.5, 56.8, 61.4, 60.1, 60.0, 62.9, 68.9, 67.6, 44.6, 68.1, 64.8, 72.3, 75.5, 66.0, 64.3, 61.5, 58.4, 55.9, 56.9, 50.7, 59.7, 42.5, 66.8, 69.2, 71.8, 70.6, 69.9, 75.5, 71.7, 69.8, 71.8, 68.7, 63.3, 61.7, 47.1, 64.8, 58.4, 67.7, 64.6, 60.7, 70.0, 62.9, 59.1, 62.6, 58.8];
+var lpiD=["2025-07-11", "2025-07-18", "2025-07-25", "2025-08-01", "2025-08-08", "2025-08-15", "2025-08-22", "2025-08-29", "2025-09-05", "2025-09-12", "2025-09-19", "2025-09-26", "2025-10-03", "2025-10-10", "2025-10-17", "2025-10-24", "2025-10-31", "2025-11-07", "2025-11-14", "2025-11-21", "2025-11-28", "2025-12-05", "2025-12-12", "2025-12-19", "2025-12-26", "2026-01-02", "2026-01-09", "2026-01-16", "2026-01-23", "2026-01-30", "2026-02-06", "2026-02-13", "2026-02-20", "2026-02-27", "2026-03-06", "2026-03-13", "2026-03-20", "2026-03-27", "2026-04-03", "2026-04-10", "2026-04-17", "2026-04-24", "2026-05-01", "2026-05-08", "2026-05-15", "2026-05-22", "2026-05-29", "2026-06-05", "2026-06-12", "2026-06-19", "2026-06-26", "2026-07-03"],lpiV=[56.0, 55.8, 40.3, 66.7, 64.0, 64.5, 62.7, 62.7, 48.6, 57.1, 55.0, 54.9, 57.9, 63.9, 62.7, 44.4, 65.8, 57.8, 72.3, 74.8, 64.2, 62.6, 57.4, 53.5, 51.0, 52.1, 43.1, 54.9, 42.4, 64.1, 66.6, 71.4, 70.4, 68.4, 74.1, 68.2, 65.0, 67.1, 64.0, 58.6, 57.1, 47.0, 62.5, 51.8, 67.7, 63.9, 59.0, 68.3, 59.1, 54.5, 58.1, 54.3];
 if(lpiD.length){
   var t60={type:"line",x0:0,x1:1,xref:"paper",y0:60,y1:60,line:{color:"#f97316",width:1,dash:"dash"}};
   var t80={type:"line",x0:0,x1:1,xref:"paper",y0:80,y1:80,line:{color:"#ef4444",width:1,dash:"dash"}};
   Plotly.newPlot("chart-lpi",[{x:lpiD,y:lpiV,type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.08)"}],
     Object.assign({},T,{shapes:[t60,t80],yaxis:Object.assign({},T.yaxis,{range:[0,100]})}),CFG);
 }else{document.getElementById("chart-lpi").innerHTML="<div style=\"color:#64748b;font-size:11px;padding:20px 0\">History unavailable</div>";}
+var gexD=[],gexV=[];
+var gexEl=document.getElementById("chart-gex-nvda");
+if(gexEl&&gexD.length>=2){
+  var gexColors=gexV.map(function(v){return v>=0?"#10b981":"#ef4444";});
+  var gexZero={type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}};
+  Plotly.newPlot("chart-gex-nvda",[{x:gexD,y:gexV,type:"scatter",mode:"lines+markers",
+    line:{color:"#6366f1",width:2},marker:{color:gexColors,size:5},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"}],
+    Object.assign({},T,{shapes:[gexZero],yaxis:Object.assign({},T.yaxis,{title:{text:"$M",font:{size:9}}}),xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);
+}
 window.addEventListener("resize",function(){
-  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});
+  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-gex-nvda"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});
 });
 })();
 </script></body></html>
