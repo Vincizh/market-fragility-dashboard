@@ -27,6 +27,8 @@ jobs:
 
       - name: Generate dashboard
         run: python generate_dashboard.py
+        env:
+          FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
 
       - name: Commit and push updated index.html
         run: |
