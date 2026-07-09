@@ -124,6 +124,176 @@ for i in range(21, len(rets) + 1):
 corr_declining = avg_c2w < avg_c1m
 print("Corr 1M={:.3f} 2W={:.3f} declining={}".format(avg_c1m, avg_c2w, corr_declining))
 
+# --- Liquidity Pressure Index (LPI / 流动性压力指数) ---
+# 4-factor composite: SOFR + Treasury duration supply + inverted Fed net liquidity + VIX.
+# Each factor -> rolling historical percentile (trailing ~560-week window), averaged to 0-100.
+# Higher value = higher pressure on equities. Every fetch is guarded so one API failure
+# degrades gracefully (factor dropped, LPI computed from the rest).
+print("Fetching LPI factors...")
+import os
+
+LPI_WINDOW = 560  # ~11 years of weekly observations
+
+def fred_csv(series, start="2010-01-01"):
+    url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={}&observation_start={}".format(series, start)
+    r = requests.get(url, timeout=30)
+    df = pd.read_csv(io.StringIO(r.text))
+    df.columns = ["date", "val"]
+    df["date"] = pd.to_datetime(df["date"])
+    df["val"] = pd.to_numeric(df["val"], errors="coerce")
+    return df.dropna().set_index("date")["val"]
+
+def to_weekly(s):
+    return s.resample("W-FRI").last().dropna()
+
+def pctile_series(s, window=LPI_WINDOW):
+    # percentile rank of each point vs its own trailing window (inclusive)
+    vals = s.values
+    out = []
+    for i in range(len(vals)):
+        lo = max(0, i - window + 1)
+        w = vals[lo:i + 1]
+        out.append(float((w <= vals[i]).sum()) / len(w) * 100.0)
+    return pd.Series(out, index=s.index)
+
+lpi_pct   = {}   # factor key -> weekly percentile Series
+lpi_raw   = {}   # factor key -> current raw reading (for display)
+lpi_ok    = {}   # factor key -> bool availability
+
+# Factor 1 — Short rate (SOFR spliced with DFF/EFFR for pre-2018 depth)
+sofr_current = None
+try:
+    sofr = to_weekly(fred_csv("SOFR"))
+    try:
+        dff = to_weekly(fred_csv("DFF"))
+        short_rate = pd.concat([dff[dff.index < sofr.index.min()], sofr], sort=False).sort_index()
+    except Exception as e:
+        print("LPI DFF splice error:", e)
+        short_rate = sofr
+    short_rate = short_rate[short_rate.index >= pd.Timestamp("2010-01-01")]
+    lpi_pct["short_rate"] = pctile_series(short_rate)
+    sofr_current = float(short_rate.iloc[-1])
+    lpi_raw["short_rate"] = sofr_current
+    lpi_ok["short_rate"] = True
+    print("LPI short_rate weeks={} last={:.3f} pct={:.1f}".format(len(short_rate), sofr_current, lpi_pct["short_rate"].iloc[-1]))
+except Exception as e:
+    lpi_ok["short_rate"] = False
+    print("LPI short_rate error:", e)
+
+# Factor 2 — Duration supply (weekly Treasury coupon issuance, trailing 4-week sum)
+issuance_4w = None
+try:
+    au_rows = []
+    for pg in range(1, 11):
+        url = ("https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query"
+               "?fields=auction_date,offering_amt,security_term"
+               "&filter=security_term:in:(2-Year,3-Year,5-Year,7-Year,10-Year,20-Year,30-Year)"
+               "&sort=-auction_date&page[size]=200&page[number]={}".format(pg))
+        page = None
+        for attempt in range(3):
+            try:
+                page = requests.get(url, timeout=40).json().get("data", [])
+                break
+            except Exception as e:
+                print("LPI auctions page {} retry {}: {}".format(pg, attempt, e))
+        if not page:
+            break
+        au_rows += page
+        if len(page) < 200:
+            break
+    if not au_rows:
+        raise RuntimeError("no auction rows")
+    au = pd.DataFrame(au_rows)
+    au["auction_date"] = pd.to_datetime(au["auction_date"])
+    au["offering_amt"] = pd.to_numeric(au["offering_amt"], errors="coerce")
+    au = au.dropna(subset=["offering_amt"])
+    wk = au.set_index("auction_date")["offering_amt"].resample("W-FRI").sum().fillna(0)
+    iss4 = (wk.rolling(4).sum().dropna()) / 1e9  # -> $ billions
+    lpi_pct["duration_supply"] = pctile_series(iss4)
+    issuance_4w = float(iss4.iloc[-1])
+    lpi_raw["duration_supply"] = issuance_4w
+    lpi_ok["duration_supply"] = True
+    print("LPI duration_supply weeks={} last_4w=${:.1f}B pct={:.1f}".format(len(iss4), issuance_4w, lpi_pct["duration_supply"].iloc[-1]))
+except Exception as e:
+    lpi_ok["duration_supply"] = False
+    print("LPI duration_supply error:", e)
+
+# Factor 3 — Fed net liquidity (WALCL - TGA), INVERTED
+netliq_current_t = None
+try:
+    walcl = to_weekly(fred_csv("WALCL"))
+    tga   = to_weekly(fred_csv("WTREGEN"))
+    # Normalize both to $ billions (FRED serves WALCL & WTREGEN in $millions; verify by magnitude).
+    def _to_bil(s):
+        return s / 1000.0 if float(s.iloc[-1]) > 100000 else s
+    walcl_b = _to_bil(walcl)
+    tga_b   = _to_bil(tga)
+    netliq = (walcl_b - tga_b).dropna()  # $ billions
+    lpi_pct["net_liquidity"] = 100.0 - pctile_series(netliq)  # INVERTED: low liquidity = high pressure
+    netliq_current_t = float(netliq.iloc[-1]) / 1000.0  # $ trillions
+    lpi_raw["net_liquidity"] = netliq_current_t
+    lpi_ok["net_liquidity"] = True
+    print("LPI net_liquidity weeks={} last=${:.3f}T (WALCL=${:.3f}T TGA=${:.1f}B) pct_inv={:.1f}".format(
+        len(netliq), netliq_current_t, float(walcl_b.iloc[-1]) / 1000.0, float(tga_b.iloc[-1]), lpi_pct["net_liquidity"].iloc[-1]))
+except Exception as e:
+    lpi_ok["net_liquidity"] = False
+    print("LPI net_liquidity error:", e)
+
+# Factor 4 — Vol amplifier (VIX percentile; deep history via Yahoo). Primary GEX proxy.
+vix_lpi_current = None
+try:
+    vix_hist = yf.download("^VIX", period="max", auto_adjust=True, progress=False)["Close"]
+    vix_hist = to_weekly(vix_hist.squeeze())
+    lpi_pct["vol_amplifier"] = pctile_series(vix_hist)
+    vix_lpi_current = float(vix_hist.iloc[-1])
+    lpi_raw["vol_amplifier"] = vix_lpi_current
+    lpi_ok["vol_amplifier"] = True
+    print("LPI vol_amplifier weeks={} last={:.2f} pct={:.1f}".format(len(vix_hist), vix_lpi_current, lpi_pct["vol_amplifier"].iloc[-1]))
+except Exception as e:
+    lpi_ok["vol_amplifier"] = False
+    print("LPI vol_amplifier error:", e)
+
+# Optional GEX annotation via FlashAlpha (never allowed to break LPI)
+gex_note = ""
+try:
+    fa_key = os.environ.get("FLASHALPHA_API_KEY")
+    if fa_key:
+        gr = requests.get("https://lab.flashalpha.com/v1/exposure/gex/SPX",
+                          headers={"X-API-KEY": fa_key}, timeout=15).json()
+        net_gex = gr.get("net_gex", gr.get("netGex"))
+        if net_gex is not None:
+            net_gex = float(net_gex)
+            gex_note = "Net GEX {:+.2f}B ({})".format(net_gex / 1e9, "negative = amplifying" if net_gex < 0 else "positive = dampening")
+            print("LPI GEX:", gex_note)
+except Exception as e:
+    print("LPI GEX (optional) error:", e)
+
+# Composite: average of available factor percentiles (current reading = last value)
+lpi_labels = {
+    "short_rate":      "Short Rate 资金价格",
+    "duration_supply": "Duration Supply 久期供给",
+    "net_liquidity":   "Net Liquidity 银行水位 (inv)",
+    "vol_amplifier":   "Vol Amplifier 波动放大器",
+}
+lpi_order = ["short_rate", "duration_supply", "net_liquidity", "vol_amplifier"]
+lpi_current = {k: float(lpi_pct[k].iloc[-1]) for k in lpi_order if lpi_ok.get(k)}
+if lpi_current:
+    lpi_composite = sum(lpi_current.values()) / len(lpi_current)
+else:
+    lpi_composite = float("nan")
+
+# 52-week composite history (align available factor percentiles on common weekly index)
+lpi_hist_dates = []
+lpi_hist_vals  = []
+if lpi_current:
+    aligned = pd.concat({k: lpi_pct[k] for k in lpi_current}, axis=1, sort=True).dropna()
+    if len(aligned):
+        lpi_series = aligned.mean(axis=1).tail(52)
+        lpi_hist_dates = [d.strftime("%Y-%m-%d") for d in lpi_series.index]
+        lpi_hist_vals  = [round(float(v), 1) for v in lpi_series.values]
+
+print("LPI composite={:.1f} factors_used={}/4".format(lpi_composite if lpi_current else float('nan'), len(lpi_current)))
+
 # --- Pre-compute all display values ---
 sig_count = sum([vix_contango, btc_pos, eth_pos, cta_covering, corr_declining])
 now_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -193,6 +363,55 @@ j_rd = json.dumps(corr_dates)
 j_rh = json.dumps(corr_hist)
 j_rf = json.dumps([0.5] * len(corr_dates))
 
+# --- LPI display values ---
+def lpi_band(v):
+    # returns (hex color, css class suffix, status text)
+    if v != v:  # NaN
+        return "#64748b", "gray", "Insufficient data"
+    if v < 40:
+        return "#10b981", "green", "Cushion Thick / Market Resilient 库存充足"
+    if v < 60:
+        return "#f59e0b", "yellow", "Neutral / Watch for inflection 中性"
+    if v < 80:
+        return "#f97316", "orange", "Elevated / Reduce leverage, widen hedges 偏高"
+    return "#ef4444", "red", "Extreme / Tail risk 5x normal — reduce exposure 极端"
+
+lpi_has = bool(lpi_current)
+lpi_col, lpi_cls, lpi_status = lpi_band(lpi_composite)
+s_lpi = "{:.1f}".format(lpi_composite) if lpi_has else "N/A"
+lpi_pos = max(0.0, min(100.0, lpi_composite)) if lpi_has else 0.0
+s_lpi_pos = "{:.1f}".format(lpi_pos)
+lpi_factors_used = "{}/4 factors".format(len(lpi_current)) if lpi_has else "no factors available"
+
+# per-factor bar HTML
+lpi_bars = ""
+for k in lpi_order:
+    lbl = lpi_labels[k]
+    if lpi_ok.get(k):
+        v = float(lpi_pct[k].iloc[-1])
+        bcol, bcls, _ = lpi_band(v)
+        vtxt = "{:.0f}".format(v)
+        wpct = "{:.1f}".format(max(0.0, min(100.0, v)))
+    else:
+        bcol, vtxt, wpct = "#64748b", "N/A", "0"
+    lpi_bars = (lpi_bars
+        + '<div class="lpi-factor">'
+        + '<div class="lpi-factor-top"><span class="lpi-factor-lbl">' + lbl + '</span>'
+        + '<span class="lpi-factor-val" style="color:' + bcol + '">' + vtxt + '</span></div>'
+        + '<div class="lpi-track"><div class="lpi-fill" style="width:' + wpct + '%;background:' + bcol + '"></div></div>'
+        + '</div>')
+
+# raw-reading footnote strings
+def _fmt_raw(k, fmt, *args):
+    return fmt.format(*args) if lpi_ok.get(k) else "N/A"
+s_lpi_sofr   = _fmt_raw("short_rate", "{:.2f}%", lpi_raw.get("short_rate", 0))
+s_lpi_iss    = _fmt_raw("duration_supply", "${:.0f}B", lpi_raw.get("duration_supply", 0))
+s_lpi_netliq = _fmt_raw("net_liquidity", "${:.2f}T", lpi_raw.get("net_liquidity", 0))
+s_lpi_vix    = _fmt_raw("vol_amplifier", "{:.1f}", lpi_raw.get("vol_amplifier", 0))
+
+j_lpi_d = json.dumps(lpi_hist_dates)
+j_lpi_v = json.dumps(lpi_hist_vals)
+
 # HTML template — plain string concatenation, zero f-strings, zero backslashes in strings
 parts = []
 parts.append('<!DOCTYPE html>')
@@ -231,6 +450,30 @@ parts.append('.dot{width:11px;height:11px;border-radius:50%}')
 parts.append('.dot.filled{background:#10b981}.dot.empty{background:#2d3748}')
 parts.append('.confirm-text{font-size:12px;color:#94a3b8}')
 parts.append('.confirm-text strong{color:#e2e8f0}')
+parts.append('.lpi-section{margin:0 20px 16px}')
+parts.append('.lpi-heading{font-size:13px;font-weight:700;color:#e2e8f0;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}')
+parts.append('.lpi-heading span{color:#6366f1}')
+parts.append('.lpi-gauge{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:16px 18px;margin-bottom:12px}')
+parts.append('.lpi-gauge.green{border-left:3px solid #10b981}.lpi-gauge.yellow{border-left:3px solid #f59e0b}')
+parts.append('.lpi-gauge.orange{border-left:3px solid #f97316}.lpi-gauge.red{border-left:3px solid #ef4444}.lpi-gauge.gray{border-left:3px solid #64748b}')
+parts.append('.lpi-gauge-top{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}')
+parts.append('.lpi-num{font-size:40px;font-weight:800;line-height:1}')
+parts.append('.lpi-scale{font-size:11px;color:#64748b}')
+parts.append('.lpi-status{font-size:13px;font-weight:600}')
+parts.append('.lpi-meter{position:relative;height:14px;border-radius:7px;background:linear-gradient(90deg,#10b981 0%,#10b981 40%,#f59e0b 40%,#f59e0b 60%,#f97316 60%,#f97316 80%,#ef4444 80%,#ef4444 100%)}')
+parts.append('.lpi-marker{position:absolute;top:-4px;width:3px;height:22px;background:#e2e8f0;border-radius:2px;box-shadow:0 0 4px rgba(0,0,0,.6);transform:translateX(-50%)}')
+parts.append('.lpi-ticks{display:flex;justify-content:space-between;font-size:9px;color:#475569;margin-top:5px}')
+parts.append('.lpi-factors{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}')
+parts.append('@media(max-width:900px){.lpi-factors{grid-template-columns:repeat(2,1fr)}}')
+parts.append('@media(max-width:480px){.lpi-factors{grid-template-columns:1fr}}')
+parts.append('.lpi-factor{background:#141720;border:1px solid #2d3748;border-radius:8px;padding:12px 14px}')
+parts.append('.lpi-factor-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}')
+parts.append('.lpi-factor-lbl{font-size:10px;color:#94a3b8;letter-spacing:.03em}')
+parts.append('.lpi-factor-val{font-size:18px;font-weight:700}')
+parts.append('.lpi-track{height:6px;border-radius:3px;background:#0a0c10;overflow:hidden}')
+parts.append('.lpi-fill{height:100%;border-radius:3px}')
+parts.append('.lpi-cal{background:#141720;border:1px solid #2d3748;border-radius:8px;padding:12px 14px;font-size:11px;color:#94a3b8;line-height:1.7}')
+parts.append('.lpi-cal b{color:#e2e8f0}.lpi-cal .hot{color:#f97316}.lpi-cal .cool{color:#10b981}')
 parts.append('.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 20px 16px}')
 parts.append('@media(max-width:700px){.charts-grid{grid-template-columns:1fr}}')
 parts.append('.chart-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px;min-width:0}')
@@ -280,6 +523,40 @@ parts.append('<div class="confirm-counter">')
 parts.append('<div class="confirm-label">Signals confirmed</div>')
 parts.append('<div class="confirm-dots">' + dots + '</div>')
 parts.append('<div class="confirm-text"><strong>' + str(sig_count) + '/5</strong> &mdash; <span style="color:' + ccol + '">' + cmsg + '</span></div>')
+parts.append('</div>')
+
+# LPI section
+parts.append('<div class="lpi-section">')
+parts.append('<div class="lpi-heading">流动性压力指数 <span>(Liquidity Pressure Index)</span></div>')
+
+# gauge card
+parts.append('<div class="lpi-gauge ' + lpi_cls + '">')
+parts.append('<div class="lpi-gauge-top">')
+parts.append('<span class="lpi-num" style="color:' + lpi_col + '">' + s_lpi + '</span>')
+parts.append('<span class="lpi-scale">/ 100 &middot; ' + lpi_factors_used + '</span>')
+parts.append('<span class="lpi-status" style="color:' + lpi_col + '">' + lpi_status + '</span></div>')
+parts.append('<div class="lpi-meter"><div class="lpi-marker" style="left:' + s_lpi_pos + '%"></div></div>')
+parts.append('<div class="lpi-ticks"><span>0 Resilient</span><span>40</span><span>60</span><span>80</span><span>100 Extreme</span></div>')
+parts.append('</div>')
+
+# sub-factor bars
+parts.append('<div class="lpi-factors">' + lpi_bars + '</div>')
+
+# 52-week history chart
+parts.append('<div class="chart-card" style="margin-bottom:12px">')
+parts.append('<div class="chart-title">LPI &mdash; Trailing 52 Weeks</div>')
+parts.append('<div class="chart-subtitle">Composite percentile pressure &middot; thresholds at 60 (elevated) / 80 (extreme)</div>')
+parts.append('<div id="chart-lpi"></div></div>')
+
+# stress calendar
+parts.append('<div class="lpi-cal">')
+parts.append('<b>2026 H2 压力日历 (projected stress calendar)</b><br>')
+parts.append('<span class="hot">Sep (~79th pct):</span> FOMC Sep 15-16 &middot; corp estimated tax Sep 15 &middot; quarter-end TGA refill Sep 30 &mdash; 4 simultaneous drains<br>')
+parts.append('<span class="hot">Nov (2nd highest):</span> quarterly refunding issuance + FOMC late Oct<br>')
+parts.append('<span class="hot">Aug (3rd):</span> refunding settlement peak mid-August<br>')
+parts.append('<span class="cool">Jul:</span> lowest pressure month of H2')
+parts.append('</div>')
+
 parts.append('</div>')
 
 # charts grid
@@ -332,8 +609,15 @@ parts.append('Plotly.newPlot("chart-corr",[')
 parts.append('  {x:' + j_rd + ',y:' + j_rh + ',type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"},')
 parts.append('  {x:' + j_rd + ',y:' + j_rf + ',type:"scatter",mode:"lines",line:{color:"#ef4444",width:1,dash:"dash"}}')
 parts.append('],Object.assign({},T,{showlegend:false}),CFG);')
+parts.append('var lpiD=' + j_lpi_d + ',lpiV=' + j_lpi_v + ';')
+parts.append('if(lpiD.length){')
+parts.append('  var t60={type:"line",x0:0,x1:1,xref:"paper",y0:60,y1:60,line:{color:"#f97316",width:1,dash:"dash"}};')
+parts.append('  var t80={type:"line",x0:0,x1:1,xref:"paper",y0:80,y1:80,line:{color:"#ef4444",width:1,dash:"dash"}};')
+parts.append('  Plotly.newPlot("chart-lpi",[{x:lpiD,y:lpiV,type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.08)"}],')
+parts.append('    Object.assign({},T,{shapes:[t60,t80],yaxis:Object.assign({},T.yaxis,{range:[0,100]})}),CFG);')
+parts.append('}else{document.getElementById("chart-lpi").innerHTML="<div style=\\"color:#64748b;font-size:11px;padding:20px 0\\">History unavailable</div>";}')
 parts.append('window.addEventListener("resize",function(){')
-parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr"].forEach(function(id){Plotly.Plots.resize(document.getElementById(id));});')
+parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
 parts.append('});')
 parts.append('})();')
 parts.append('</script></body></html>')
