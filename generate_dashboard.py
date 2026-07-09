@@ -22,7 +22,10 @@ import json
 import io
 import zipfile
 import os
+import re
 import sys
+import time
+from math import log, sqrt, exp, pi
 from datetime import datetime, timezone
 
 print("Starting dashboard generation...")
@@ -734,6 +737,243 @@ else:
     gex_note = ""
 
 # ---------------------------------------------------------------------------
+# Homebrew Index GEX (Part A) — SPY + QQQ dealer gamma from yfinance chains
+# ---------------------------------------------------------------------------
+# SqueezeMetrics naive convention: dealers long calls (+), short puts (-),
+# OI-weighted Black-Scholes gamma expressed in $bn per 1% underlying move.
+# Daily snapshots persist inside an embedded <script id="hgex-state"> JSON block
+# (the workflow only commits index.html, so no side-car file survives).
+print("Computing homebrew index GEX (SPY/QQQ)...")
+
+HOMEBREW_GEX_SYMBOLS = ["SPY", "QQQ"]
+HGEX_LOOKAHEAD_DAYS  = 45
+HGEX_MAX_EXPIRIES    = 10
+HGEX_SNAP_MAX        = 400        # rolling daily-snapshot cap per symbol
+HGEX_PCTILE_MIN_DAYS = 60         # suppress percentile until this much history
+HGEX_STATE_RE = re.compile(
+    r'<script id="hgex-state" type="application/json">(.*?)</script>', re.DOTALL)
+
+
+def load_hgex_state(prev_html):
+    """Extract {symbol: {date: snapshot}} from a prior index.html string."""
+    if not prev_html:
+        return {}
+    m = HGEX_STATE_RE.search(prev_html)
+    if not m:
+        return {}
+    try:
+        raw = json.loads(m.group(1))
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for sym, snaps in raw.items():
+        if isinstance(snaps, dict):
+            out[sym] = {d: v for d, v in snaps.items() if isinstance(v, dict)}
+    return out
+
+
+def hgex_state_block(state):
+    payload = json.dumps(state, separators=(",", ":")).replace("</", "<\\/")
+    return '<script id="hgex-state" type="application/json">' + payload + '</script>'
+
+
+def _norm_pdf(x):
+    return exp(-0.5 * x * x) / sqrt(2.0 * pi)
+
+
+def bs_gamma(S, K, T, sigma, r):
+    """Black-Scholes gamma = phi(d1) / (S*sigma*sqrt(T))."""
+    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
+        return 0.0
+    d1 = (log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrt(T))
+    return _norm_pdf(d1) / (S * sigma * sqrt(T))
+
+
+def _option_chain_retry(tk, expiry, retries=2):
+    last = None
+    for a in range(retries + 1):
+        try:
+            return tk.option_chain(expiry)
+        except Exception as e:                       # noqa: BLE001
+            last = e
+            time.sleep(0.4 * (a + 1))
+    raise last if last else RuntimeError("option_chain failed")
+
+
+def compute_homebrew_gex(symbol, now_utc, r):
+    """Return (reading dict | None, n_expiries_succeeded)."""
+    tk = yf.Ticker(symbol)
+    spot = None
+    try:
+        spot = float(tk.fast_info["last_price"])
+    except Exception:
+        pass
+    if not spot or spot <= 0:
+        spot = float(tk.history(period="1d")["Close"].iloc[-1])
+
+    exps = tk.options or []
+    sel = []
+    for e in exps:
+        try:
+            days = (datetime.strptime(e, "%Y-%m-%d").date() - now_utc.date()).days
+        except Exception:
+            continue
+        if 0 <= days <= HGEX_LOOKAHEAD_DAYS:
+            sel.append(e)
+    sel = sel[:HGEX_MAX_EXPIRIES]
+
+    by_strike, call_by, put_by = {}, {}, {}
+    n_contracts = 0
+    n_ok_exp = 0
+    dbg = None
+    for e in sel:
+        try:
+            oc = _option_chain_retry(tk, e, 2)
+        except Exception as ex:                      # noqa: BLE001
+            print("  hgex {} expiry {} failed: {}".format(symbol, e, ex))
+            continue
+        exp_dt = datetime.strptime(e, "%Y-%m-%d").replace(
+            hour=20, minute=0, tzinfo=timezone.utc)   # ~16:00 ET
+        T = (exp_dt - now_utc).total_seconds() / (365.0 * 86400.0)
+        if T < 1.0 / 365.0:
+            T = 1.0 / 365.0
+        n_ok_exp += 1
+        for df, is_call in [(oc.calls, True), (oc.puts, False)]:
+            if df is None or df.empty:
+                continue
+            for K, oi, iv in zip(df["strike"], df["openInterest"], df["impliedVolatility"]):
+                try:
+                    K, oi, iv = float(K), float(oi), float(iv)
+                except (TypeError, ValueError):
+                    continue
+                # NaN-safe: NaN fails every comparison, so reject explicitly.
+                if not (K == K and oi == oi and iv == iv):
+                    continue
+                if oi <= 0 or iv <= 0.001 or iv > 5.0:
+                    continue
+                g = bs_gamma(spot, K, T, iv, r)
+                dollar = g * oi * 100.0 * spot * spot * 0.01   # $ per 1% move
+                signed = dollar if is_call else -dollar
+                by_strike[K] = by_strike.get(K, 0.0) + signed
+                (call_by if is_call else put_by)[K] = \
+                    (call_by if is_call else put_by).get(K, 0.0) + dollar
+                n_contracts += 1
+                if dbg is None:
+                    dbg = (e, is_call, K, oi, iv, T, g, signed)
+        time.sleep(0.25)                             # gentle on Yahoo in CI
+
+    if n_ok_exp < 3:
+        return None, n_ok_exp
+
+    net_gex = sum(by_strike.values()) / 1e9          # $bn per 1% move
+    strikes = sorted(by_strike.keys())
+
+    # Gamma flip: zero crossing of cumulative-from-low profile nearest spot.
+    flip, cum, prev_s, prev_c, crossings = None, 0.0, None, None, []
+    for K in strikes:
+        cum += by_strike[K]
+        if prev_c is not None and prev_c != 0 and (prev_c < 0) != (cum < 0):
+            x = prev_s + (K - prev_s) * (0.0 - prev_c) / (cum - prev_c) if cum != prev_c else K
+            crossings.append(x)
+        prev_s, prev_c = K, cum
+    if crossings:
+        flip = min(crossings, key=lambda x: abs(x - spot))
+
+    walls = [(round(k, 2), v / 1e9) for k, v in
+             sorted(by_strike.items(), key=lambda kv: -abs(kv[1]))[:3]]
+    call_wall = max(call_by.items(), key=lambda kv: kv[1])[0] if call_by else None
+    put_wall  = max(put_by.items(),  key=lambda kv: kv[1])[0] if put_by  else None
+    lo, hi = spot * 0.9, spot * 1.1
+    profile = [(round(k, 2), round(by_strike[k] / 1e9, 4)) for k in strikes if lo <= k <= hi]
+
+    if dbg:
+        print("  hgex BS check {}: exp={} {} K={} OI={:.0f} IV={:.3f} T={:.4f} "
+              "gamma={:.3e} $gamma/1%={:+.3e}".format(
+                  symbol, dbg[0], "call" if dbg[1] else "put", dbg[2],
+                  dbg[3], dbg[4], dbg[5], dbg[6], dbg[7]))
+    return {
+        "symbol": symbol, "spot": spot, "net_gex": net_gex, "flip": flip,
+        "call_wall": call_wall, "put_wall": put_wall, "walls": walls,
+        "n_expiries": n_ok_exp, "n_contracts": n_contracts, "profile": profile,
+    }, n_ok_exp
+
+
+hgex_state = load_hgex_state(_prev_html)
+hgex_results = {}
+r_gex = (sofr_current / 100.0) if sofr_current else 0.05
+hgex_today = gex_now.strftime("%Y-%m-%d")
+for _sym in HOMEBREW_GEX_SYMBOLS:
+    _reading, _nexp = None, 0
+    try:
+        _reading, _nexp = compute_homebrew_gex(_sym, gex_now, r_gex)
+    except Exception as e:                           # noqa: BLE001
+        print("hgex {} error (non-fatal): {}".format(_sym, e))
+    snaps = hgex_state.get(_sym, {})
+    cached = False
+    if _reading:
+        snaps[hgex_today] = {
+            "net_gex": _reading["net_gex"], "flip": _reading["flip"],
+            "spot": _reading["spot"], "n_expiries": _reading["n_expiries"],
+            "n_contracts": _reading["n_contracts"]}
+        if len(snaps) > HGEX_SNAP_MAX:
+            for d in sorted(snaps.keys())[:-HGEX_SNAP_MAX]:
+                del snaps[d]
+        hgex_state[_sym] = snaps
+    elif snaps:
+        last = sorted(snaps.keys())[-1]
+        s = snaps[last]
+        _reading = {"symbol": _sym, "spot": s.get("spot"), "net_gex": s.get("net_gex"),
+                    "flip": s.get("flip"), "call_wall": None, "put_wall": None,
+                    "walls": [], "n_expiries": s.get("n_expiries", 0),
+                    "n_contracts": s.get("n_contracts", 0), "profile": [], "cached_date": last}
+        cached = True
+    else:
+        hgex_results[_sym] = {"ok": False, "n_expiries": _nexp}
+        print("  hgex {}: no data (expiries ok={}), no cached snapshot".format(_sym, _nexp))
+        continue
+    hist_vals = [v["net_gex"] for v in snaps.values() if v.get("net_gex") is not None]
+    n_days = len(snaps)
+    pctile = pct_of(hist_vals, _reading["net_gex"]) if n_days >= HGEX_PCTILE_MIN_DAYS else float("nan")
+    rec = {"ok": True, "cached": cached, "pctile": pctile, "n_days": n_days}
+    rec.update(_reading)
+    hgex_results[_sym] = rec
+    print("  hgex {} net={:+.2f}$bn/1% spot={:.2f} flip={} walls={} exp={} contracts={} days={} cached={}".format(
+        _sym, _reading["net_gex"], _reading["spot"],
+        "{:.2f}".format(_reading["flip"]) if _reading.get("flip") else "none",
+        [w[0] for w in _reading.get("walls", [])], _reading["n_expiries"],
+        _reading["n_contracts"], n_days, cached))
+
+# Dealer-gamma signal source resolution (Part A4): homebrew SPY -> NVDA -> N/A
+spy_res = hgex_results.get("SPY", {})
+qqq_res = hgex_results.get("QQQ", {})
+hgex_spy_has = bool(spy_res.get("ok")) and spy_res.get("net_gex") is not None
+hgex_spy_net = spy_res.get("net_gex") if hgex_spy_has else None
+if hgex_spy_has:
+    dg_has, dg_source = True, "SPY GEX (homebrew)"
+    dg_positive = hgex_spy_net >= 0
+    dg_val_txt = "{:+.2f} $bn/1%".format(hgex_spy_net)
+elif gex_nvda["has"]:
+    dg_has, dg_source = True, "NVDA proxy (fallback)"
+    dg_positive = gex_nvda["positive"]
+    dg_val_txt = gex_monitor.fmt_gex(gex_nvda["net_gex"])
+else:
+    dg_has, dg_source, dg_positive, dg_val_txt = False, "N/A", False, "N/A"
+
+# Amplification badge source (homebrew SPY/QQQ negative -> else NVDA)
+_hb_any = hgex_spy_has or (qqq_res.get("ok") and qqq_res.get("net_gex") is not None)
+if _hb_any:
+    amp_neg = (hgex_spy_has and hgex_spy_net < 0) or \
+              (qqq_res.get("ok") and qqq_res.get("net_gex") is not None and qqq_res["net_gex"] < 0)
+    amp_src = "SPY/QQQ"
+else:
+    amp_neg = gex_nvda["has"] and not gex_nvda["positive"]
+    amp_src = "NVDA"
+print("Dealer-gamma signal: source={} positive={} amp_neg={} ({})".format(
+    dg_source, dg_positive if dg_has else "N/A", amp_neg, amp_src))
+
+# ---------------------------------------------------------------------------
 # Pre-compute display values
 # ---------------------------------------------------------------------------
 sig_count = sum([vix_contango, btc_pos, eth_pos, cta_covering, corr_declining])
@@ -838,8 +1078,8 @@ for k in lpi_order:
     else:
         bcol, vtxt, wpct, arr = "#64748b", "N/A", "0", ""
     amp_badge = ""
-    if k == "vol_amplifier" and gex_nvda["has"] and not gex_nvda["positive"]:
-        amp_badge = ('<div class="lpi-amp-badge">NVDA negative gamma — '
+    if k == "vol_amplifier" and amp_neg:
+        amp_badge = ('<div class="lpi-amp-badge">' + amp_src + ' negative gamma — '
                      'shock amplification regime</div>')
     lpi_bars = (lpi_bars
         + '<div class="lpi-factor">'
@@ -1003,8 +1243,118 @@ for tk in ["UST2Y", "UST5Y", "UST10Y"]:
 # --- Summary strip ---
 strip_lpi = (s_lpi + " <span style=\"color:" + reg_col + "\">" + reg_dir + "</span>") if lpi_has else "N/A"
 
+# ---------------------------------------------------------------------------
+# Key Takeaway (Part B) — deterministic, rule-based, bilingual. No LLM.
+# One sentence per layer + a synthesis stance from a decision table. Every
+# clause degrades to "data unavailable" rather than crashing or fabricating.
+# Language is strictly about sizing / hedging / fragility — never directional.
+# ---------------------------------------------------------------------------
+def takeaway_stance(level, direction, basis, gex_sign, lpi):
+    """Return (english_stance, chinese_tag, color) from the decision table."""
+    crowded = (basis == basis) and basis >= 80
+    gex_neg = gex_sign == "negative"
+    if lpi == lpi and lpi >= 80:
+        return ("Extreme fragility — defensive posture: minimize leverage and carry robust hedges.",
+                "极端压力—防守", "#ef4444")
+    if (gex_neg and lpi == lpi and lpi >= 60):
+        return ("Reduce leverage and widen hedges — dealer gamma is negative into an elevated-fragility tape (amplification regime).",
+                "降杠杆加对冲", "#ef4444")
+    if level == "High" and direction == "Rising":
+        return ("Reduce leverage and widen hedges — fragility is high and still rising (amplification regime).",
+                "降杠杆加对冲", "#ef4444")
+    if level == "High" and direction == "Falling":
+        return ("Decompression: pressure receding from highs — a measured re-engagement window per the de-lever signals.",
+                "关注拐点", "#14b8a6")
+    if level == "Low" and direction == "Rising":
+        return ("Inflection watch: pressure is building from a low base — begin staging hedges.",
+                "关注拐点", "#f59e0b")
+    if level == "Low" and crowded:
+        return ("Cushion is thick today, but crowded basis positioning makes issuance events the tail to watch — keep calendar hedges around auction / refunding windows.",
+                "保持仓位—关注基差", "#f59e0b")
+    if level == "Low":
+        base = "Full risk budget; the liquidity cushion is thick"
+        return ((base + " and dealers are dampening.") if gex_sign == "positive" else (base + "."),
+                "保持仓位", "#10b981")
+    return ("Elevated but stable — keep hedges on and size moderately.", "关注拐点", "#f97316")
+
+
+def build_takeaway():
+    sents = []
+    # 1 — Fragility
+    if lpi_has:
+        s = ("Fragility: LPI {:.0f} ({} · {}), ΔLPI 13w {}, breadth {}/4 factors "
+             "elevated-and-rising.").format(lpi_composite, reg_level, reg_dir, s_d13, breadth)
+        t8 = tail_table.get(current_band, {}).get(8) if tail_ok else None
+        b8 = tail_table.get("ALL", {}).get(8) if tail_ok else None
+        if t8 and b8:
+            s += (" In band {}, 8-week P(>10% drawdown) was {} vs {} baseline.").format(
+                current_band, _pctu(t8["p10"]), _pctu(b8["p10"]))
+        sents.append(s)
+    else:
+        sents.append("Fragility: LPI data unavailable this run.")
+
+    # 2 — Crowding
+    bits2 = []
+    if basis_has:
+        bits2.append("basis-trade proxy {:.0f} ({})".format(basis_proxy, basis_msg[0].lower() + basis_msg[1:]))
+    eq = [(k, cot_markets[k]) for k in ["SPX", "NQ", "RTY"] if k in cot_markets]
+    if eq:
+        k, m = max(eq, key=lambda km: abs((km[1].get("pct", 50) or 50) - 50))
+        ztxt = "{:+.1f}".format(m["z"]) if m.get("z") == m.get("z") else "n/a"
+        pv = m.get("pct", float("nan"))
+        bits2.append("most-extreme equity positioning {} at {} pctile (z {})".format(
+            m["label"], "{:.0f}th".format(pv) if pv == pv else "n/a", ztxt))
+    sents.append(("Crowding: " + "; ".join(bits2) + ".") if bits2
+                 else "Crowding: positioning data unavailable this run.")
+
+    # 3 — Amplifiers
+    bits3 = []
+    if dg_has:
+        tag = "positive / dampening" if dg_positive else "negative / amplifying"
+        if hgex_spy_has and spy_res.get("flip") and spy_res.get("spot"):
+            fp = (spy_res["flip"] - spy_res["spot"]) / spy_res["spot"] * 100.0
+            bits3.append("dealer gamma {} via {} (flip {:+.1f}% vs spot)".format(tag, dg_source, fp))
+        else:
+            bits3.append("dealer gamma {} via {}".format(tag, dg_source))
+    else:
+        bits3.append("dealer gamma unavailable")
+    bits3.append("VIX term structure in " + ("contango" if vix_contango else "backwardation"))
+    bits3.append("crypto funding " + ("positive" if (btc_pos and eth_pos)
+                 else ("mixed" if (btc_pos or eth_pos) else "negative")))
+    bits3.append("{}/5 de-lever signals confirmed".format(sig_count))
+    sents.append("Amplifiers: " + "; ".join(bits3) + ".")
+
+    gsign = ("positive" if dg_positive else "negative") if dg_has else None
+    st_en, st_cn, st_col = takeaway_stance(
+        reg_level, reg_dir, basis_proxy, gsign, lpi_composite if lpi_has else float("nan"))
+    return sents, st_en, st_cn, st_col
+
+
+tk_sents, tk_stance_en, tk_stance_cn, tk_stance_col = build_takeaway()
+print("Key Takeaway stance:", tk_stance_en, "|", tk_stance_cn)
+
+# Decision-table demonstration (forced combos) + degraded-mode check for logs
+for _combo in [("Low", "Falling", 40.0, "positive", 35.0),
+               ("Low", "Rising", 50.0, "positive", 45.0),
+               ("High", "Rising", 85.0, "negative", 72.0),
+               ("High", "Falling", 60.0, "positive", 66.0),
+               ("Low", "Falling", 92.0, "positive", 38.0)]:
+    print("  stance{} -> {} | {}".format(_combo, *takeaway_stance(*_combo)[:2]))
+
 j_gex_d = gex_hist_d
 j_gex_v = gex_hist_v
+
+# Homebrew GEX display precompute
+def _fmt_bn(v):
+    return "{:+.2f}".format(v) if (v is not None and v == v) else "N/A"
+
+hgex_spy_profile = spy_res.get("profile", []) if spy_res.get("ok") else []
+j_hgex_strk = json.dumps([p[0] for p in hgex_spy_profile])
+j_hgex_val  = json.dumps([p[1] for p in hgex_spy_profile])
+hgex_spy_spot = spy_res.get("spot") if spy_res.get("ok") else None
+hgex_spy_flip = spy_res.get("flip") if spy_res.get("ok") else None
+j_hgex_spot = json.dumps(hgex_spy_spot if (hgex_spy_spot and hgex_spy_spot == hgex_spy_spot) else None)
+j_hgex_flip = json.dumps(hgex_spy_flip if (hgex_spy_flip and hgex_spy_flip == hgex_spy_flip) else None)
 
 # ---------------------------------------------------------------------------
 # HTML assembly (Part C: three-layer architecture)
@@ -1148,6 +1498,16 @@ parts.append('.gex-card-note{font-size:9px;color:#f59e0b;margin-top:4px}')
 parts.append('.gex-quota{font-size:10px;color:#64748b;background:#141720;border:1px solid #2d3748;border-radius:8px;padding:9px 13px}')
 parts.append('.gex-quota b{color:#94a3b8}.gex-quota .red{color:#ef4444}.gex-quota .green{color:#10b981}.gex-quota .gray{color:#64748b}')
 parts.append('.lpi-amp-badge{display:inline-block;font-size:9px;font-weight:600;color:#ef4444;background:rgba(239,68,68,.15);padding:2px 7px;border-radius:4px;margin-top:6px}')
+parts.append('.takeaway{margin:14px 20px 4px;background:#141720;border:1px solid #2d3748;border-radius:12px;padding:16px 18px}')
+parts.append('.takeaway-title{font-size:14px;font-weight:800;color:#e2e8f0;margin-bottom:3px}')
+parts.append('.takeaway-title span{color:#6366f1;font-size:12px;font-weight:600}')
+parts.append('.takeaway-ts{font-size:10px;color:#475569;margin-bottom:10px}')
+parts.append('.takeaway-body{font-size:12px;color:#cbd5e1;line-height:1.65;margin-bottom:11px}')
+parts.append('.takeaway-body div{margin-bottom:4px}')
+parts.append('.takeaway-stance{font-size:13px;font-weight:700;padding:10px 13px;border-radius:0 8px 8px 0;line-height:1.5}')
+parts.append('.takeaway-stance .tk-cn{font-weight:800;margin-left:6px}')
+parts.append('.hgex-sig{font-size:11px;color:#94a3b8;background:#141720;border:1px solid #2d3748;border-radius:8px;padding:9px 13px;margin-bottom:12px}')
+parts.append('.hgex-sig .green{color:#10b981;font-weight:700}.hgex-sig .red{color:#ef4444;font-weight:700}.hgex-sig .gray{color:#64748b;font-weight:700}')
 parts.append('.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 20px 16px}')
 parts.append('@media(max-width:700px){.charts-grid{grid-template-columns:1fr}}')
 parts.append('.chart-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px;min-width:0}')
@@ -1174,6 +1534,20 @@ parts.append('<div class="summary-cell"><div class="lbl">Crowding · Basis-Trade
 parts.append('<div class="summary-cell"><div class="lbl">Amplifiers · Signals Confirmed</div>'
              + '<div class="val" style="color:' + ccol + '">' + str(sig_count) + '/5</div>'
              + '<div class="sub">' + cmsg + '</div></div>')
+parts.append('</div>')
+
+# Key Takeaway card (below summary strip, above Layer 1)
+parts.append('<div class="takeaway">')
+parts.append('<div class="takeaway-title">关键结论 Key Takeaway <span>rule-based · sizing &amp; hedging only</span></div>')
+parts.append('<div class="takeaway-ts">generated ' + now_str + ' &middot; deterministic (no forecast)</div>')
+parts.append('<div class="takeaway-body">')
+for _s in tk_sents:
+    parts.append('<div>' + _s + '</div>')
+parts.append('</div>')
+parts.append('<div class="takeaway-stance" style="background:' + tk_stance_col
+             + '22;border-left:4px solid ' + tk_stance_col + ';color:' + tk_stance_col + '">'
+             + 'Stance: ' + tk_stance_en
+             + '<span class="tk-cn">' + tk_stance_cn + '</span></div>')
 parts.append('</div>')
 
 # ===================== LAYER 1 — FRAGILITY =====================
@@ -1325,7 +1699,77 @@ parts.append('<div class="confirm-dots">' + dots + '</div>')
 parts.append('<div class="confirm-text"><strong>' + str(sig_count) + '/5</strong> &mdash; <span style="color:' + ccol + '">' + cmsg + '</span></div>')
 parts.append('</div>')
 
-# GEX Monitor section
+# Homebrew Index GEX section (SPY + QQQ)
+def _hgex_card(sym):
+    res = hgex_results.get(sym, {})
+    if not res.get("ok"):
+        return ('<div class="gex-card gray"><div class="gex-card-sym">' + sym + '</div>'
+                '<div class="gex-card-na">N/A</div>'
+                '<div class="gex-card-note">homebrew GEX unavailable (Yahoo options)</div></div>')
+    ng = res["net_gex"]
+    pos = ng >= 0
+    cls = "green" if pos else "red"
+    spot, flip = res.get("spot"), res.get("flip")
+    q = []
+    q.append('<div class="gex-card ' + cls + '">')
+    fresh = ('<span class="gex-cached">cached ' + str(res.get("cached_date", "")) + '</span>'
+             if res.get("cached") else '<span class="gex-fresh">live</span>')
+    q.append('<div class="gex-card-head"><span class="gex-card-sym">' + sym + '</span>' + fresh + '</div>')
+    q.append('<div class="gex-card-val ' + cls + '">' + _fmt_bn(ng)
+             + ' <span style="font-size:11px;color:#64748b">$bn/1%</span></div>')
+    q.append('<div class="gex-card-lbl">net GEX &middot; '
+             + ('positive — dealers dampen vol' if pos else 'negative — dealers amplify') + '</div>')
+    if flip and spot:
+        pctd = (spot - flip) / flip * 100.0
+        dcls = "green" if pctd >= 0 else "red"
+        dirn = "above" if pctd >= 0 else "below"
+        q.append('<div class="gex-flip-txt">Flip ' + "{:.2f}".format(flip) + ' &middot; Spot '
+                 + "{:.2f}".format(spot) + ' &middot; <span class="' + dcls + '">spot '
+                 + "{:+.1f}%".format(pctd) + ' ' + dirn + ' flip</span></div>')
+    elif spot:
+        q.append('<div class="gex-flip-txt">Spot ' + "{:.2f}".format(spot)
+                 + ' &middot; no gamma flip in range</div>')
+    else:
+        q.append('<div class="gex-flip-txt">flip / spot unavailable</div>')
+    if res.get("walls"):
+        wtxt = ", ".join("{:.0f} ({})".format(k, _fmt_bn(v)) for k, v in res["walls"])
+        q.append('<div class="gex-card-lbl">gamma walls: ' + wtxt + '</div>')
+    cw, pw = res.get("call_wall"), res.get("put_wall")
+    if cw and pw:
+        q.append('<div class="gex-flip-txt">call wall ' + "{:.0f}".format(cw)
+                 + ' &middot; put wall ' + "{:.0f}".format(pw) + '</div>')
+    q.append('<div class="gex-card-foot">front ' + str(HGEX_LOOKAHEAD_DAYS) + 'd &middot; '
+             + str(res.get("n_expiries", 0)) + ' exp &middot; '
+             + str(res.get("n_contracts", 0)) + ' contracts</div>')
+    nd = res.get("n_days", 0)
+    if nd >= HGEX_PCTILE_MIN_DAYS and res.get("pctile") == res.get("pctile"):
+        q.append('<div class="gex-card-note" style="color:#94a3b8">history percentile '
+                 + "{:.0f}".format(res["pctile"]) + 'th (' + str(nd) + ' days)</div>')
+    else:
+        q.append('<div class="gex-card-note" style="color:#64748b">accumulating history ('
+                 + str(nd) + '/' + str(HGEX_PCTILE_MIN_DAYS) + ' days)</div>')
+    q.append('</div>')
+    return "".join(q)
+
+parts.append('<div class="gex-section">')
+parts.append('<div class="gex-heading">Index GEX (homebrew) <span>指数伽马 · SqueezeMetrics 约定 · $bn / 1% move</span></div>')
+_dg_cls = "green" if (dg_has and dg_positive) else ("red" if dg_has else "gray")
+_dg_txt = (("POSITIVE ✅ dealers dampening" if dg_positive else "NEGATIVE ❌ dealers amplifying")
+           if dg_has else "N/A — no source available")
+parts.append('<div class="hgex-sig">De-lever signal #5 &mdash; Dealer Gamma &middot; source <b>' + dg_source
+             + '</b> (' + dg_val_txt + '): <span class="' + _dg_cls + '">' + _dg_txt + '</span></div>')
+parts.append('<div class="gex-cards">' + "".join(_hgex_card(s) for s in HOMEBREW_GEX_SYMBOLS) + '</div>')
+parts.append('<div class="chart-card" style="margin-bottom:12px"><div class="chart-title">SPY Net GEX by Strike (&plusmn;10% of spot)</div>')
+if hgex_spy_profile:
+    parts.append('<div class="chart-subtitle">Green = positive gamma (dampening) &middot; red = negative &middot; dashed = spot, solid = gamma flip</div>')
+    parts.append('<div id="chart-hgex-spy"></div>')
+else:
+    parts.append('<div class="chart-subtitle">strike profile unavailable this run</div>')
+parts.append('</div>')
+parts.append('</div>')  # gex-section (homebrew)
+parts.append(hgex_state_block(hgex_state))
+
+# FlashAlpha single-stock GEX Monitor section (unchanged)
 parts.append(gex_section_html)
 
 # charts grid
@@ -1346,6 +1790,7 @@ parts.append('<div class="bottom-item">LPI: <span>FRED (WALCL/WTREGEN/RRPONTSYD/
 parts.append('<div class="bottom-item">Tail table: <span>Yahoo ^GSPC weekly</span></div>')
 parts.append('<div class="bottom-item">COT: <span>CFTC Socrata TFF + Disaggregated</span></div>')
 parts.append('<div class="bottom-item">Funding: <span>Binance (CoinGecko) + OKX API</span></div>')
+parts.append('<div class="bottom-item">Index GEX: <span>homebrew SPY/QQQ (Yahoo option chains, BS gamma)</span></div>')
 parts.append('<div class="bottom-item">GEX: <span>FlashAlpha free tier (NVDA/AAPL/AMD/MU, 5 req/day)</span></div>')
 parts.append('</div>')
 
@@ -1405,8 +1850,18 @@ parts.append('  Plotly.newPlot("chart-gex-nvda",[{x:gexD,y:gexV,type:"scatter",m
 parts.append('    line:{color:"#6366f1",width:2},marker:{color:gexColors,size:5},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"}],')
 parts.append('    Object.assign({},T,{shapes:[gexZero],yaxis:Object.assign({},T.yaxis,{title:{text:"$M",font:{size:9}}}),xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);')
 parts.append('}')
+parts.append('var hgS=' + j_hgex_strk + ',hgV=' + j_hgex_val + ',hgSpot=' + j_hgex_spot + ',hgFlip=' + j_hgex_flip + ';')
+parts.append('var hgEl=document.getElementById("chart-hgex-spy");')
+parts.append('if(hgEl&&hgS.length){')
+parts.append('  var hgColors=hgV.map(function(v){return v>=0?"#10b981":"#ef4444";});')
+parts.append('  var hgShapes=[{type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}}];')
+parts.append('  if(hgSpot!==null){hgShapes.push({type:"line",x0:hgSpot,x1:hgSpot,yref:"paper",y0:0,y1:1,line:{color:"#e2e8f0",width:1,dash:"dash"}});}')
+parts.append('  if(hgFlip!==null){hgShapes.push({type:"line",x0:hgFlip,x1:hgFlip,yref:"paper",y0:0,y1:1,line:{color:"#6366f1",width:1.5}});}')
+parts.append('  Plotly.newPlot("chart-hgex-spy",[{x:hgS,y:hgV,type:"bar",marker:{color:hgColors}}],')
+parts.append('    Object.assign({},T,{shapes:hgShapes,yaxis:Object.assign({},T.yaxis,{title:{text:"$bn/1%",font:{size:9}}})}),CFG);')
+parts.append('}')
 parts.append('window.addEventListener("resize",function(){')
-parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
+parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda","chart-hgex-spy"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
 parts.append('});')
 parts.append('})();')
 parts.append('</script></body></html>')

@@ -136,6 +136,16 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 .gex-quota{font-size:10px;color:#64748b;background:#141720;border:1px solid #2d3748;border-radius:8px;padding:9px 13px}
 .gex-quota b{color:#94a3b8}.gex-quota .red{color:#ef4444}.gex-quota .green{color:#10b981}.gex-quota .gray{color:#64748b}
 .lpi-amp-badge{display:inline-block;font-size:9px;font-weight:600;color:#ef4444;background:rgba(239,68,68,.15);padding:2px 7px;border-radius:4px;margin-top:6px}
+.takeaway{margin:14px 20px 4px;background:#141720;border:1px solid #2d3748;border-radius:12px;padding:16px 18px}
+.takeaway-title{font-size:14px;font-weight:800;color:#e2e8f0;margin-bottom:3px}
+.takeaway-title span{color:#6366f1;font-size:12px;font-weight:600}
+.takeaway-ts{font-size:10px;color:#475569;margin-bottom:10px}
+.takeaway-body{font-size:12px;color:#cbd5e1;line-height:1.65;margin-bottom:11px}
+.takeaway-body div{margin-bottom:4px}
+.takeaway-stance{font-size:13px;font-weight:700;padding:10px 13px;border-radius:0 8px 8px 0;line-height:1.5}
+.takeaway-stance .tk-cn{font-weight:800;margin-left:6px}
+.hgex-sig{font-size:11px;color:#94a3b8;background:#141720;border:1px solid #2d3748;border-radius:8px;padding:9px 13px;margin-bottom:12px}
+.hgex-sig .green{color:#10b981;font-weight:700}.hgex-sig .red{color:#ef4444;font-weight:700}.hgex-sig .gray{color:#64748b;font-weight:700}
 .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 20px 16px}
 @media(max-width:700px){.charts-grid{grid-template-columns:1fr}}
 .chart-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px;min-width:0}
@@ -147,11 +157,21 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="header"><div class="header-left">
 <h1>De-Lever Signal Dashboard <span>/ NDX</span></h1>
 <p>3-layer risk stack: fragility · crowding · amplifiers &middot; auto-updated every hour</p></div>
-<div class="header-right"><div class="timestamp">Last updated: 2026-07-09 14:02 UTC</div></div></div>
+<div class="header-right"><div class="timestamp">Last updated: 2026-07-09 15:03 UTC</div></div></div>
 <div class="summary-strip">
 <div class="summary-cell"><div class="lbl">Fragility · LPI + Regime</div><div class="val" style="color:#f59e0b">59.3 <span style="color:#10b981">Falling</span></div><div class="sub">Cushion thick, stable — full risk budget</div></div>
 <div class="summary-cell"><div class="lbl">Crowding · Basis-Trade Proxy</div><div class="val" style="color:#ef4444">93</div><div class="sub">Basis trade crowded — issuance shocks amplified</div></div>
 <div class="summary-cell"><div class="lbl">Amplifiers · Signals Confirmed</div><div class="val" style="color:#10b981">4/5</div><div class="sub">Strong confirmation — consider re-entry on core names</div></div>
+</div>
+<div class="takeaway">
+<div class="takeaway-title">关键结论 Key Takeaway <span>rule-based · sizing &amp; hedging only</span></div>
+<div class="takeaway-ts">generated 2026-07-09 15:03 UTC &middot; deterministic (no forecast)</div>
+<div class="takeaway-body">
+<div>Fragility: LPI 59 (Low · Falling), ΔLPI 13w -4.8, breadth 0/4 factors elevated-and-rising. In band 40-60, 8-week P(>10% drawdown) was 9.2% vs 8.5% baseline.</div>
+<div>Crowding: basis-trade proxy 93 (basis trade crowded — issuance shocks amplified); most-extreme equity positioning Nasdaq-100 at 0th pctile (z -2.3).</div>
+<div>Amplifiers: dealer gamma positive / dampening via SPY GEX (homebrew) (flip +0.7% vs spot); VIX term structure in contango; crypto funding positive; 4/5 de-lever signals confirmed.</div>
+</div>
+<div class="takeaway-stance" style="background:#f59e0b22;border-left:4px solid #f59e0b;color:#f59e0b">Stance: Cushion is thick today, but crowded basis positioning makes issuance events the tail to watch — keep calendar hedges around auction / refunding windows.<span class="tk-cn">保持仓位—关注基差</span></div>
 </div>
 <div class="layer-header">第一层 · 脆弱度 Fragility <span>Liquidity Pressure Index</span><span class="tf">weeks–months</span></div>
 <div class="lpi-section">
@@ -169,7 +189,7 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="regime-box"><div class="rb-title">Regime &middot; 状态</div><div class="regime-msg" style="color:#10b981">Cushion thick, stable — full risk budget</div><div class="regime-delta">&Delta;LPI 13w <b style="color:#e2e8f0">-4.8</b> &middot; &Delta;LPI 4w <b style="color:#e2e8f0">-7.7</b> &middot; breadth 0/4 factors &gt;70th and rising</div></div>
 <div class="regime-box"><div class="rb-title">Level × Direction</div><div class="mtx"><div class="mtx-cell" style="background:#0f131b;color:#64748b;border:1px solid #2d3748"><div class="mtx-top">High · Fall/Flat</div><div class="mtx-sub">Decompress / stable</div></div><div class="mtx-cell" style="background:#0f131b;color:#64748b;border:1px solid #2d3748"><div class="mtx-top">High · Rising</div><div class="mtx-sub">Danger zone</div></div><div class="mtx-cell" style="background:#10b981;color:#0d0f14"><div class="mtx-top">Low · Fall/Flat</div><div class="mtx-sub">Cushion thick</div></div><div class="mtx-cell" style="background:#0f131b;color:#64748b;border:1px solid #2d3748"><div class="mtx-top">Low · Rising</div><div class="mtx-sub">Inflection watch</div></div></div></div>
 </div>
-<div class="lpi-factors"><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Short Rate 资金价格</span><span class="lpi-factor-val" style="color:#f97316">66<span style="color:#10b981;font-size:11px;margin-left:5px">▼</span></span></div><div class="lpi-track"><div class="lpi-fill" style="width:66.1%;background:#f97316"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Duration Supply 久期供给</span><span class="lpi-factor-val" style="color:#f97316">78<span style="color:#10b981;font-size:11px;margin-left:5px">▼</span></span></div><div class="lpi-track"><div class="lpi-fill" style="width:78.2%;background:#f97316"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Net Liquidity 银行水位 (inv)</span><span class="lpi-factor-val" style="color:#f59e0b">43<span style="color:#ef4444;font-size:11px;margin-left:5px">▲</span></span></div><div class="lpi-track"><div class="lpi-fill" style="width:42.7%;background:#f59e0b"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Vol Amplifier 波动放大器</span><span class="lpi-factor-val" style="color:#f59e0b">48<span style="color:#10b981;font-size:11px;margin-left:5px">▼</span></span></div><div class="lpi-track"><div class="lpi-fill" style="width:47.9%;background:#f59e0b"></div></div></div></div>
+<div class="lpi-factors"><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Short Rate 资金价格</span><span class="lpi-factor-val" style="color:#f97316">66<span style="color:#10b981;font-size:11px;margin-left:5px">▼</span></span></div><div class="lpi-track"><div class="lpi-fill" style="width:66.1%;background:#f97316"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Duration Supply 久期供给</span><span class="lpi-factor-val" style="color:#f97316">78<span style="color:#10b981;font-size:11px;margin-left:5px">▼</span></span></div><div class="lpi-track"><div class="lpi-fill" style="width:78.2%;background:#f97316"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Net Liquidity 银行水位 (inv)</span><span class="lpi-factor-val" style="color:#f59e0b">43<span style="color:#ef4444;font-size:11px;margin-left:5px">▲</span></span></div><div class="lpi-track"><div class="lpi-fill" style="width:42.7%;background:#f59e0b"></div></div></div><div class="lpi-factor"><div class="lpi-factor-top"><span class="lpi-factor-lbl">Vol Amplifier 波动放大器</span><span class="lpi-factor-val" style="color:#f59e0b">48<span style="color:#10b981;font-size:11px;margin-left:5px">▼</span></span></div><div class="lpi-track"><div class="lpi-fill" style="width:47.9%;background:#f59e0b"></div></div><div class="lpi-amp-badge">SPY/QQQ negative gamma — shock amplification regime</div></div></div>
 <div class="tail-wrap">
 <div class="tail-title">Conditional Tail Table &mdash; forward S&amp;P 500 by LPI band</div>
 <div class="tail-readout">Current LPI 59 → band 40-60: historically mean 4-week return +0.8% (vs +0.8% baseline) but P(&gt;10% drawdown) 2.7% vs 2.3% baseline — tail risk ~1.2× normal.</div>
@@ -216,13 +236,13 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="signal-bar">
 <div class="signal-card green">
 <div class="signal-label">&#9312; VIX Term Structure</div>
-<div class="signal-value green">+2.65 pts</div>
-<div class="signal-sub">VIX9D 14.1 &rarr; VIX 16.5 &rarr; VIX3M 19.2</div>
+<div class="signal-value green">+2.71 pts</div>
+<div class="signal-sub">VIX9D 13.9 &rarr; VIX 16.5 &rarr; VIX3M 19.2</div>
 <div class="signal-badge badge-green">CONTANGO ✅</div></div>
 <div class="signal-card green">
 <div class="signal-label">&#9313; Crypto Funding (Binance)</div>
-<div class="signal-value green">BTC +0.6560%</div>
-<div class="signal-sub">ETH +0.2091% &middot; OKX BTC +0.0041%</div>
+<div class="signal-value green">BTC +0.5712%</div>
+<div class="signal-sub">ETH +0.2679% &middot; OKX BTC +0.0037%</div>
 <div class="signal-badge badge-green">BOTH POSITIVE ✅ — Risk appetite returning</div></div>
 <div class="signal-card red">
 <div class="signal-label">&#9314; CTA Proxy (CFTC COT)</div>
@@ -231,8 +251,8 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="signal-badge badge-red">ADDING SHORTS ⚠️</div></div>
 <div class="signal-card green">
 <div class="signal-label">&#9315; Cross-Sector Correlation</div>
-<div class="signal-value green">0.080</div>
-<div class="signal-sub">2W vs 1M avg: 0.158 &rarr; 0.080</div>
+<div class="signal-value green">0.078</div>
+<div class="signal-sub">2W vs 1M avg: 0.158 &rarr; 0.078</div>
 <div class="signal-badge badge-green">DECLINING ✅</div></div>
 </div>
 <div class="confirm-counter">
@@ -240,6 +260,16 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="confirm-dots"><div class="dot filled" title="VIX Contango"></div><div class="dot filled" title="BTC FR+"></div><div class="dot filled" title="ETH FR+"></div><div class="dot empty" title="CTA Covering"></div><div class="dot filled" title="Corr Declining"></div></div>
 <div class="confirm-text"><strong>4/5</strong> &mdash; <span style="color:#10b981">Strong confirmation — consider re-entry on core names</span></div>
 </div>
+<div class="gex-section">
+<div class="gex-heading">Index GEX (homebrew) <span>指数伽马 · SqueezeMetrics 约定 · $bn / 1% move</span></div>
+<div class="hgex-sig">De-lever signal #5 &mdash; Dealer Gamma &middot; source <b>SPY GEX (homebrew)</b> (+3.70 $bn/1%): <span class="green">POSITIVE ✅ dealers dampening</span></div>
+<div class="gex-cards"><div class="gex-card green"><div class="gex-card-head"><span class="gex-card-sym">SPY</span><span class="gex-fresh">live</span></div><div class="gex-card-val green">+3.70 <span style="font-size:11px;color:#64748b">$bn/1%</span></div><div class="gex-card-lbl">net GEX &middot; positive — dealers dampen vol</div><div class="gex-flip-txt">Flip 753.90 &middot; Spot 748.75 &middot; <span class="red">spot -0.7% below flip</span></div><div class="gex-card-lbl">gamma walls: 750 (+2.28), 740 (-1.18), 757 (+0.86)</div><div class="gex-flip-txt">call wall 750 &middot; put wall 740</div><div class="gex-card-foot">front 45d &middot; 10 exp &middot; 1878 contracts</div><div class="gex-card-note" style="color:#64748b">accumulating history (1/60 days)</div></div><div class="gex-card red"><div class="gex-card-head"><span class="gex-card-sym">QQQ</span><span class="gex-fresh">live</span></div><div class="gex-card-val red">-0.12 <span style="font-size:11px;color:#64748b">$bn/1%</span></div><div class="gex-card-lbl">net GEX &middot; negative — dealers amplify</div><div class="gex-flip-txt">Spot 719.48 &middot; no gamma flip in range</div><div class="gex-card-lbl">gamma walls: 715 (-0.75), 720 (+0.39), 700 (-0.35)</div><div class="gex-flip-txt">call wall 720 &middot; put wall 715</div><div class="gex-card-foot">front 45d &middot; 10 exp &middot; 1996 contracts</div><div class="gex-card-note" style="color:#64748b">accumulating history (1/60 days)</div></div></div>
+<div class="chart-card" style="margin-bottom:12px"><div class="chart-title">SPY Net GEX by Strike (&plusmn;10% of spot)</div>
+<div class="chart-subtitle">Green = positive gamma (dampening) &middot; red = negative &middot; dashed = spot, solid = gamma flip</div>
+<div id="chart-hgex-spy"></div>
+</div>
+</div>
+<script id="hgex-state" type="application/json">{"SPY":{"2026-07-09":{"net_gex":3.698008613924893,"flip":753.9007145720515,"spot":748.75,"n_expiries":10,"n_contracts":1878}},"QQQ":{"2026-07-09":{"net_gex":-0.12286442199131851,"flip":null,"spot":719.47998046875,"n_expiries":10,"n_contracts":1996}}}</script>
 <div class="gex-section">
 <div class="gex-heading">GEX Monitor <span>做市商伽马监控 (Dealer Gamma)</span></div>
 <div class="gex-note-box">FlashAlpha API key not configured &mdash; GEX monitor idle. Set <b>FLASHALPHA_API_KEY</b> to enable.</div>
@@ -260,6 +290,7 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="bottom-item">Tail table: <span>Yahoo ^GSPC weekly</span></div>
 <div class="bottom-item">COT: <span>CFTC Socrata TFF + Disaggregated</span></div>
 <div class="bottom-item">Funding: <span>Binance (CoinGecko) + OKX API</span></div>
+<div class="bottom-item">Index GEX: <span>homebrew SPY/QQQ (Yahoo option chains, BS gamma)</span></div>
 <div class="bottom-item">GEX: <span>FlashAlpha free tier (NVDA/AAPL/AMD/MU, 5 req/day)</span></div>
 </div>
 <script>
@@ -271,23 +302,23 @@ var T={paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",
   margin:{l:40,r:8,t:8,b:40},showlegend:false,height:190,autosize:true};
 var CFG={responsive:true,displayModeBar:false};
 var vixShape={type:"line",x0:0,x1:1,xref:"paper",y0:20,y1:20,line:{color:"#ef4444",width:1,dash:"dot"}};
-Plotly.newPlot("chart-vix",[{x:["2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09"],y:[15.32, 16.05, 15.77, 16.06, 15.4, 21.51, 18.92, 19.87, 22.22, 19.44, 17.68, 16.2, 16.41, 18.44, 16.4, 17.28, 19.49, 18.63, 18.89, 18.41, 17.65, 16.45, 16.59, 16.15, 15.57, 16.13, 16.9, 16.55],type:"scatter",mode:"lines",
+Plotly.newPlot("chart-vix",[{x:["2026-05-29", "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09"],y:[15.32, 16.05, 15.77, 16.06, 15.4, 21.51, 18.92, 19.87, 22.22, 19.44, 17.68, 16.2, 16.41, 18.44, 16.4, 17.28, 19.49, 18.63, 18.89, 18.41, 17.65, 16.45, 16.59, 16.15, 15.57, 16.13, 16.9, 16.54],type:"scatter",mode:"lines",
   line:{color:"#f59e0b",width:2},fill:"tozeroy",fillcolor:"rgba(245,158,11,0.07)"}],
   Object.assign({},T,{shapes:[vixShape]}),CFG);
-Plotly.newPlot("chart-vix-term",[{x:["VIX9D","VIX spot","VIX3M"],y:[14.1,16.55,19.2],
+Plotly.newPlot("chart-vix-term",[{x:["VIX9D","VIX spot","VIX3M"],y:[13.92,16.54,19.25],
   type:"bar",marker:{color:["#ef4444","#f59e0b","#10b981"],line:{width:0}},
-  text:["14.1","16.55","19.2"],textposition:"outside",textfont:{color:"#e2e8f0",size:12},
+  text:["13.92","16.54","19.25"],textposition:"outside",textfont:{color:"#e2e8f0",size:12},
   width:[0.5,0.5,0.5]}],
   {paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",font:{color:"#94a3b8",size:10},
    xaxis:{type:"category",gridcolor:"#1e2433",tickfont:{size:11,color:"#94a3b8"},fixedrange:true},
-   yaxis:{gridcolor:"#1e2433",tickfont:{size:9},range:[0,24.00],automargin:true,fixedrange:true},
+   yaxis:{gridcolor:"#1e2433",tickfont:{size:9},range:[0,24.06],automargin:true,fixedrange:true},
    margin:{l:30,r:8,t:28,b:36},showlegend:false,height:190,autosize:true},CFG);
 var cotColors=[-41041, -42626, -41577, -45034, -58892, -54238, -55663, -56339, -73737, -65822, -70676, -74838, -56754, -51468, -57403, -79944].map(function(v){return v>=0?"#10b981":"#ef4444";});
 var zeroLine={type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}};
 if(["2026-03-17", "2026-03-24", "2026-03-31", "2026-04-07", "2026-04-14", "2026-04-21", "2026-04-28", "2026-05-05", "2026-05-12", "2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09", "2026-06-16", "2026-06-23", "2026-06-30"].length){Plotly.newPlot("chart-cot",[{x:["2026-03-17", "2026-03-24", "2026-03-31", "2026-04-07", "2026-04-14", "2026-04-21", "2026-04-28", "2026-05-05", "2026-05-12", "2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09", "2026-06-16", "2026-06-23", "2026-06-30"],y:[-41041, -42626, -41577, -45034, -58892, -54238, -55663, -56339, -73737, -65822, -70676, -74838, -56754, -51468, -57403, -79944],type:"bar",marker:{color:cotColors}}],
   Object.assign({},T,{shapes:[zeroLine],xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);}
 Plotly.newPlot("chart-corr",[
-  {x:["2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09"],y:[0.1513, 0.162, 0.1756, 0.1721, 0.1401, 0.1985, 0.2042, 0.1934, 0.1785, 0.171, 0.1702, 0.1688, 0.1604, 0.1527, 0.1375, 0.1575, 0.1541, 0.1434, 0.1569, 0.1578],type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"},
+  {x:["2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09"],y:[0.1513, 0.162, 0.1756, 0.1721, 0.1401, 0.1985, 0.2042, 0.1934, 0.1785, 0.171, 0.1702, 0.1688, 0.1604, 0.1527, 0.1375, 0.1575, 0.1541, 0.1434, 0.1569, 0.1577],type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"},
   {x:["2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26", "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02", "2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09"],y:[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],type:"scatter",mode:"lines",line:{color:"#ef4444",width:1,dash:"dash"}}
 ],Object.assign({},T,{showlegend:false}),CFG);
 var t60={type:"line",x0:0,x1:1,xref:"paper",y0:60,y1:60,line:{color:"#f97316",width:1,dash:"dash"}};
@@ -317,8 +348,18 @@ if(gexEl&&gexD.length>=2){
     line:{color:"#6366f1",width:2},marker:{color:gexColors,size:5},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"}],
     Object.assign({},T,{shapes:[gexZero],yaxis:Object.assign({},T.yaxis,{title:{text:"$M",font:{size:9}}}),xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);
 }
+var hgS=[674.0, 675.0, 676.0, 677.0, 678.0, 679.0, 680.0, 681.0, 682.0, 683.0, 684.0, 685.0, 686.0, 687.0, 688.0, 689.0, 690.0, 691.0, 692.0, 693.0, 694.0, 695.0, 696.0, 697.0, 698.0, 699.0, 700.0, 701.0, 702.0, 703.0, 704.0, 705.0, 706.0, 707.0, 708.0, 709.0, 710.0, 711.0, 712.0, 713.0, 714.0, 715.0, 716.0, 717.0, 718.0, 719.0, 720.0, 721.0, 722.0, 723.0, 724.0, 725.0, 726.0, 727.0, 728.0, 729.0, 730.0, 731.0, 732.0, 733.0, 734.0, 735.0, 736.0, 737.0, 737.5, 738.0, 739.0, 740.0, 741.0, 742.0, 742.5, 743.0, 744.0, 745.0, 746.0, 747.0, 747.5, 748.0, 749.0, 750.0, 751.0, 752.0, 752.5, 753.0, 754.0, 755.0, 756.0, 757.0, 757.5, 758.0, 759.0, 760.0, 761.0, 762.0, 762.5, 763.0, 764.0, 765.0, 766.0, 767.0, 768.0, 769.0, 770.0, 771.0, 772.0, 773.0, 774.0, 775.0, 776.0, 777.0, 778.0, 779.0, 780.0, 781.0, 782.0, 783.0, 784.0, 785.0, 786.0, 787.0, 788.0, 789.0, 790.0, 791.0, 792.0, 793.0, 794.0, 795.0, 796.0, 797.0, 798.0, 799.0, 800.0, 805.0, 810.0, 815.0, 820.0],hgV=[-0.0014, -0.0067, -0.0007, -0.0004, -0.0007, -0.0005, -0.0104, -0.0008, -0.0005, -0.0009, -0.0005, -0.0118, -0.0015, -0.0013, -0.0018, -0.0009, -0.0281, -0.0021, -0.0067, -0.0014, -0.0064, -0.0189, -0.0186, -0.0056, -0.0173, -0.0016, -0.0768, -0.0032, -0.0482, -0.0135, -0.0426, -0.0599, -0.0453, -0.047, -0.0585, -0.0242, -0.1463, -0.0088, -0.026, -0.0101, -0.1102, -0.0939, -0.0661, -0.0135, -0.0554, -0.0329, -0.3157, -0.0153, -0.0436, -0.0326, -0.0768, -0.2414, -0.024, -0.056, -0.1688, -0.0593, -0.2322, -0.0644, -0.1598, -0.087, -0.0596, -0.4921, -0.0948, -0.1272, -0.018, -0.1431, -0.1915, -1.1801, -0.1741, -0.2453, -0.0509, -0.2719, -0.2544, -0.0813, -0.0522, 0.4709, 0.0373, 0.2804, 0.6811, 2.2771, 0.8514, 0.6392, 0.125, 0.5474, 0.328, 0.5448, 0.2871, 0.8588, 0.0044, 0.1787, 0.0904, 0.7633, 0.0673, 0.0699, 0.001, 0.1421, 0.0575, 0.1235, 0.0489, 0.0226, 0.025, 0.1139, 0.09, 0.0127, 0.0094, 0.0084, 0.0075, 0.0343, 0.0062, 0.0069, 0.0042, 0.0038, 0.0151, 0.0039, 0.0036, 0.0041, 0.0035, 0.0067, 0.0019, 0.0018, 0.0012, 0.0015, 0.0064, 0.0022, 0.0012, 0.0009, 0.0018, 0.0029, 0.0004, 0.0003, 0.0018, 0.0052, 0.0073, 0.0021, 0.0013, 0.0014, 0.001],hgSpot=748.75,hgFlip=753.9007145720515;
+var hgEl=document.getElementById("chart-hgex-spy");
+if(hgEl&&hgS.length){
+  var hgColors=hgV.map(function(v){return v>=0?"#10b981":"#ef4444";});
+  var hgShapes=[{type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}}];
+  if(hgSpot!==null){hgShapes.push({type:"line",x0:hgSpot,x1:hgSpot,yref:"paper",y0:0,y1:1,line:{color:"#e2e8f0",width:1,dash:"dash"}});}
+  if(hgFlip!==null){hgShapes.push({type:"line",x0:hgFlip,x1:hgFlip,yref:"paper",y0:0,y1:1,line:{color:"#6366f1",width:1.5}});}
+  Plotly.newPlot("chart-hgex-spy",[{x:hgS,y:hgV,type:"bar",marker:{color:hgColors}}],
+    Object.assign({},T,{shapes:hgShapes,yaxis:Object.assign({},T.yaxis,{title:{text:"$bn/1%",font:{size:9}}})}),CFG);
+}
 window.addEventListener("resize",function(){
-  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});
+  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda","chart-hgex-spy"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});
 });
 })();
 </script></body></html>
