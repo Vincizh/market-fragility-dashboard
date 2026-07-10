@@ -603,6 +603,7 @@ def band_key(v):
 
 
 tail_table = {}     # band -> horizon -> stats dict
+tail_dd = {}        # band -> horizon -> np.array of max-drawdowns (time-ordered) for bootstrap
 tail_ok = False
 spx_weekly = None
 try:
@@ -654,6 +655,7 @@ try:
 
         for name in ["ALL"] + [b[2] for b in LPI_BANDS]:
             tail_table[name] = {h: agg(rows[h][name]) for h in (4, 8)}
+            tail_dd[name] = {h: np.array([x[2] for x in rows[h][name]], dtype=float) for h in (4, 8)}
         tail_ok = True
         print("Tail table built. N(ALL,4w)={} N(ALL,8w)={}".format(
             tail_table["ALL"][4]["n"], tail_table["ALL"][8]["n"]))
@@ -726,6 +728,218 @@ if lpi_has:
     lpi_hist_vals  = [round(float(v), 1) for v in s52.values]
     lpi_full_dates = [d.strftime("%Y-%m-%d") for d in lpi_series_full.index]
     lpi_full_vals  = [round(float(v), 1) for v in lpi_series_full.values]
+
+# ===========================================================================
+# Phase 6 — Fragility layer enrichment
+# ===========================================================================
+
+# --- Item 1: weighted contribution decomposition (trailing 52 weeks) --------
+# LPI = equal-weight mean of the available factor percentiles per week, so each
+# factor's contribution that week is pct_i / (#valid factors). The stacked
+# contributions therefore sum EXACTLY to the composite line (checked below).
+lpi_decomp = {k: [] for k in lpi_order}
+lpi_decomp_ok = False
+decomp_max_diff = float("nan")
+if lpi_has and avail_pct:
+    dfp = pd.concat(avail_pct, axis=1, sort=True).sort_index().reindex(lpi_series_full.index)
+    cnt = dfp.notna().sum(axis=1)
+    contrib = dfp.div(cnt, axis=0).fillna(0.0)
+    contrib52 = contrib.tail(52)
+    for k in lpi_order:
+        if k in contrib52.columns:
+            lpi_decomp[k] = [round(float(x), 6) for x in contrib52[k].values]
+        else:
+            lpi_decomp[k] = [0.0] * len(contrib52)
+    stacked_sum = contrib52.sum(axis=1).values
+    comp52 = lpi_series_full.tail(52).values
+    decomp_max_diff = float(np.max(np.abs(stacked_sum - comp52))) if len(comp52) else float("nan")
+    lpi_decomp_ok = decomp_max_diff < 1e-6
+    print("LPI decomposition: max|stack-comp|={:.2e} ok={} last_stack={:.2f} last_comp={:.2f}".format(
+        decomp_max_diff, lpi_decomp_ok, float(stacked_sum[-1]) if len(stacked_sum) else float("nan"),
+        float(comp52[-1]) if len(comp52) else float("nan")))
+
+# --- Item 2: per-factor 52w score sparklines + WoW / 13w change --------------
+lpi_spark = {}     # factor -> [52 scores]
+lpi_change = {}    # factor -> {"wow":x, "w13":y}
+for k in lpi_order:
+    if lpi_ok.get(k):
+        ps = lpi_pct[k].dropna()
+        lpi_spark[k] = [round(float(x), 1) for x in ps.tail(52).values]
+        lpi_change[k] = {
+            "wow": (float(ps.iloc[-1] - ps.iloc[-2]) if len(ps) >= 2 else float("nan")),
+            "w13": (float(ps.iloc[-1] - ps.iloc[-14]) if len(ps) >= 14 else float("nan")),
+        }
+    else:
+        lpi_spark[k] = []
+        lpi_change[k] = {"wow": float("nan"), "w13": float("nan")}
+
+# --- Item 3: regime-clock snail trail (trailing 26 weeks) -------------------
+clock_pts = []
+if lpi_has:
+    s = lpi_series_full
+    d13s = s - s.shift(13)
+    cdf = pd.DataFrame({"lpi": s, "d13": d13s}).dropna().tail(26)
+    for d, row in cdf.iterrows():
+        clock_pts.append({"d": d.strftime("%Y-%m-%d"),
+                          "x": round(float(row["lpi"]), 2),
+                          "y": round(float(row["d13"]), 2)})
+
+# --- Item 4: block-bootstrap drawdown probabilities + min-N band merge -------
+def circular_block_bootstrap_probs(dd, block_len, thresholds=(-0.05, -0.10), B=1500, seed=20260710):
+    """Circular block bootstrap of P(maxDD < threshold). Block length ~ horizon
+    (weeks) to respect overlapping-window autocorrelation. Returns
+    {threshold: (point%, lo5%, hi95%)}."""
+    dd = dd[~np.isnan(dd)]
+    out = {t: (float("nan"), float("nan"), float("nan")) for t in thresholds}
+    n = len(dd)
+    if n == 0:
+        return out
+    rng = np.random.default_rng(seed)
+    L = max(1, min(int(block_len), n))
+    nblocks = int(np.ceil(n / L))
+    draws = {t: [] for t in thresholds}
+    ar = np.arange(L)
+    for _ in range(B):
+        starts = rng.integers(0, n, size=nblocks)
+        idx = (starts[:, None] + ar[None, :]).ravel() % n
+        samp = dd[idx][:n]
+        for t in thresholds:
+            draws[t].append(float((samp < t).mean() * 100.0))
+    for t in thresholds:
+        arr = np.asarray(draws[t])
+        pt = float((dd < t).mean() * 100.0)
+        lo = float(np.percentile(arr, 5))
+        hi = float(np.percentile(arr, 95))
+        out[t] = (pt, min(lo, pt), max(hi, pt))   # CI always brackets the point estimate
+    return out
+
+TAIL_MIN_N = 30
+tailchart = {"bands": [], "baseline": {}, "ok": False}
+if tail_ok:
+    base_names = [b[2] for b in LPI_BANDS]
+    merged = []
+    for name in base_names:
+        merged.append({
+            "labels": [name],
+            "dd": {4: tail_dd.get(name, {}).get(4, np.array([])),
+                   8: tail_dd.get(name, {}).get(8, np.array([]))},
+            "n": len(tail_dd.get(name, {}).get(4, [])),
+        })
+    # merge thin top bands downward into their lower neighbour
+    i = len(merged) - 1
+    while i > 0:
+        if merged[i]["n"] < TAIL_MIN_N:
+            merged[i - 1]["labels"] += merged[i]["labels"]
+            for h in (4, 8):
+                merged[i - 1]["dd"][h] = np.concatenate([merged[i - 1]["dd"][h], merged[i]["dd"][h]])
+            merged[i - 1]["n"] = len(merged[i - 1]["dd"][4])
+            merged.pop(i)
+        i -= 1
+    if len(merged) > 1 and merged[0]["n"] < TAIL_MIN_N:
+        merged[1]["labels"] = merged[0]["labels"] + merged[1]["labels"]
+        for h in (4, 8):
+            merged[1]["dd"][h] = np.concatenate([merged[0]["dd"][h], merged[1]["dd"][h]])
+        merged[1]["n"] = len(merged[1]["dd"][4])
+        merged.pop(0)
+    for g in merged:
+        lo = g["labels"][0].split("-")[0]
+        hi = g["labels"][-1].split("-")[1]
+        is_merged = len(g["labels"]) > 1
+        lab = lo + "-" + hi + (" (merged)" if is_merged else "")
+        r4 = circular_block_bootstrap_probs(g["dd"][4], 4)
+        r8 = circular_block_bootstrap_probs(g["dd"][8], 8)
+        tailchart["bands"].append({
+            "label": lab, "n": g["n"],
+            "current": (current_band in g["labels"]) if current_band else False,
+            "p5": {"4": r4[-0.05], "8": r8[-0.05]},
+            "p10": {"4": r4[-0.10], "8": r8[-0.10]},
+        })
+    if tail_table.get("ALL"):
+        tailchart["baseline"] = {
+            "p5_4": tail_table["ALL"][4]["p5"], "p5_8": tail_table["ALL"][8]["p5"],
+            "p10_4": tail_table["ALL"][4]["p10"], "p10_8": tail_table["ALL"][8]["p10"],
+        }
+    tailchart["ok"] = True
+    print("Tail chart bands: {}".format([(b["label"], b["n"]) for b in tailchart["bands"]]))
+
+# --- Item 5: per-factor deterministic bilingual commentary ------------------
+# EDIT WORDING HERE. Keyed by factor -> band(lo/mid/hi) -> direction, with the
+# raw physical-unit metric interpolated. Sizing / fragility language only.
+FACTOR_COMMENTARY = {
+    "short_rate": {
+        "lo":  {"any": ("Funding cheap at {raw} SOFR — financing tailwind, low carry drag.", "资金宽松")},
+        "mid": {"rising":  ("SOFR {raw} and firming — funding cost creeping into carry trades.", "资金趋紧"),
+                "falling": ("SOFR {raw} and easing — modest funding relief.", "资金转松"),
+                "flat":    ("SOFR {raw}, steady — neutral funding backdrop.", "资金中性")},
+        "hi":  {"any": ("Expensive funding at {raw} SOFR — carry costly, size leverage smaller.", "资金昂贵")},
+    },
+    "duration_supply": {
+        "lo":  {"any": ("Light coupon supply ({raw} 4w) — duration demand easily absorbed.", "久期供给低")},
+        "mid": {"rising":  ("Coupon supply building ({raw} 4w) — watch auction/refunding windows.", "久期供给上升"),
+                "falling": ("Coupon supply easing ({raw} 4w) — issuance drain receding.", "久期供给回落"),
+                "flat":    ("Coupon supply steady ({raw} 4w) — issuance pressure balanced.", "久期供给平稳")},
+        "hi":  {"any": ("Heavy issuance ({raw} 4w) — refunding waves dominate; keep calendar hedges.", "久期供给高企")},
+    },
+    "net_liquidity": {
+        "lo":  {"any": ("Ample bank reserves ({raw} net liq) — deep liquidity cushion.", "流动性充裕")},
+        "mid": {"rising":  ("Net liquidity draining toward {raw} — cushion thinning.", "流动性收紧"),
+                "falling": ("Net liquidity rebuilding to {raw} — cushion refilling.", "流动性回补"),
+                "flat":    ("Net liquidity steady near {raw} — reserves stable.", "流动性平稳")},
+        "hi":  {"any": ("Thin net liquidity ({raw}) — drains bite faster; trim gross into stress windows.", "流动性偏紧")},
+    },
+    "vol_amplifier": {
+        "lo":  {"any": ("Calm vol regime (VIX {raw}) — gamma dampening, shocks absorbed.", "波动低企")},
+        "mid": {"rising":  ("VIX firming to {raw} — vol beginning to amplify moves.", "波动上升"),
+                "falling": ("VIX easing to {raw} — amplification fading.", "波动回落"),
+                "flat":    ("VIX steady at {raw} — neutral vol amplification.", "波动中性")},
+        "hi":  {"any": ("Stressed vol (VIX {raw}) — moves amplify; widen hedges, cut convexity risk.", "波动放大")},
+    },
+}
+
+def _factor_band(score):
+    if score != score:
+        return None
+    return "lo" if score < 40 else ("hi" if score > 70 else "mid")
+
+def factor_commentary(k, score, direction, raw_txt):
+    band = _factor_band(score)
+    if band is None or raw_txt in (None, "N/A"):
+        return ("Data unavailable this run.", "数据缺失")
+    tbl = FACTOR_COMMENTARY.get(k, {}).get(band, {})
+    entry = tbl.get("any") or tbl.get(direction) or tbl.get("flat")
+    if not entry:
+        return ("Data unavailable this run.", "数据缺失")
+    en, cn = entry
+    return (en.format(raw=raw_txt), cn)
+
+# --- Item 6: top-3 historical stress weeks (with causal tags) ---------------
+STRESS_EPISODES = [
+    ("2018-11", "QT tantrum 缩表恐慌"), ("2019-08", "repo crunch 回购紧张"),
+    ("2020-02", "COVID crash 疫情崩盘"), ("2020-03", "COVID crash 疫情崩盘"),
+    ("2008", "GFC 金融危机"), ("2011-08", "US downgrade 评级下调"),
+    ("2023-03", "SVB stress 银行压力"), ("2022", "hiking shock 加息冲击"),
+]
+stress_top3 = []
+for d, v in top10[:3]:
+    tag = ""
+    for pre, t in STRESS_EPISODES:
+        if d.startswith(pre):
+            tag = t
+            break
+    stress_top3.append({"d": d, "v": v, "tag": tag})
+
+# --- Item 6: projected 2026-H2 stress calendar timeline ---------------------
+today_iso = datetime.now(timezone.utc).date().isoformat()
+stress_cal = [
+    {"d": "2026-07-15", "sev": "low",  "color": "#10b981", "size": 11,
+     "label": "Jul — lowest H2 pressure"},
+    {"d": "2026-08-15", "sev": "mod",  "color": "#f59e0b", "size": 15,
+     "label": "Aug — refunding settlement peak"},
+    {"d": "2026-09-16", "sev": "high", "color": "#ef4444", "size": 22,
+     "label": "Sep — FOMC + corp tax + TGA refill (4 drains)"},
+    {"d": "2026-11-04", "sev": "elev", "color": "#f97316", "size": 18,
+     "label": "Nov — quarterly refunding + FOMC"},
+]
 
 # --- GEX Monitor (Phase 2b, FlashAlpha free tier) ---------------------------
 print("Running GEX monitor...")
@@ -1092,6 +1306,34 @@ lpi_factors_used = "{}/4 factors".format(len(avail_pct)) if lpi_has else "no fac
 ARROW = {"up": "▲", "down": "▼", "flat": "▬"}
 ARROW_COL = {"up": "#ef4444", "down": "#10b981", "flat": "#64748b"}
 
+def _fmt_raw(k, fmt, *args):
+    return fmt.format(*args) if lpi_ok.get(k) else "N/A"
+s_lpi_sofr   = _fmt_raw("short_rate", "{:.2f}%", lpi_raw.get("short_rate", 0))
+s_lpi_iss    = _fmt_raw("duration_supply", "${:.0f}B", lpi_raw.get("duration_supply", 0))
+s_lpi_netliq = _fmt_raw("net_liquidity", "${:.2f}T", lpi_raw.get("net_liquidity", 0))
+s_lpi_vix    = _fmt_raw("vol_amplifier", "{:.1f}", lpi_raw.get("vol_amplifier", 0))
+
+# Raw physical-unit metric shown on each factor card (reuses series already computed).
+LPI_RAW_TXT = {"short_rate": s_lpi_sofr, "duration_supply": s_lpi_iss,
+               "net_liquidity": s_lpi_netliq, "vol_amplifier": s_lpi_vix}
+LPI_RAW_UNIT = {"short_rate": "SOFR overnight", "duration_supply": "coupon supply, 4w sum",
+                "net_liquidity": "WALCL &minus; TGA &minus; RRP", "vol_amplifier": "VIX spot"}
+FACTOR_SPARK_COL = {"short_rate": "#6366f1", "duration_supply": "#f59e0b",
+                    "net_liquidity": "#14b8a6", "vol_amplifier": "#ef4444"}
+
+def _chg_chip(val, invert_color=False):
+    if val != val:
+        return '<span class="fx-chg" style="color:#64748b">&mdash;</span>'
+    up = val > 0.5
+    dn = val < -0.5
+    col = "#64748b"
+    if up:
+        col = "#10b981" if invert_color else "#ef4444"
+    elif dn:
+        col = "#ef4444" if invert_color else "#10b981"
+    sym = "&#9650;" if up else ("&#9660;" if dn else "&#9644;")
+    return '<span class="fx-chg" style="color:' + col + '">' + sym + " {:+.0f}".format(val) + '</span>'
+
 lpi_bars = ""
 for k in lpi_order:
     lbl = lpi_labels[k]
@@ -1103,8 +1345,20 @@ for k in lpi_order:
         d = factor_dir.get(k, "flat")
         arr = ('<span style="color:' + ARROW_COL[d] + ';font-size:11px;margin-left:5px">'
                + ARROW[d] + '</span>')
+        raw_line = ('<div class="fx-raw"><b>' + LPI_RAW_TXT[k] + '</b> '
+                    + '<span class="fx-unit">' + LPI_RAW_UNIT[k] + '</span></div>')
+        ch = lpi_change.get(k, {})
+        chip_line = ('<div class="fx-chips">wow ' + _chg_chip(ch.get("wow", float("nan")))
+                     + ' &middot; 13w ' + _chg_chip(ch.get("w13", float("nan"))) + '</div>')
+        spark_line = '<div class="fx-spark" id="spark-' + k + '"></div>'
+        en, cn = factor_commentary(k, v, d, LPI_RAW_TXT[k])
+        cmt_line = '<div class="fx-cmt">' + en + ' <span class="fx-cmt-cn">' + cn + '</span></div>'
     else:
         bcol, vtxt, wpct, arr = "#64748b", "N/A", "0", ""
+        raw_line = '<div class="fx-raw"><span class="fx-unit">data unavailable</span></div>'
+        chip_line = ''
+        spark_line = ''
+        cmt_line = '<div class="fx-cmt">Data unavailable this run. <span class="fx-cmt-cn">数据缺失</span></div>'
     amp_badge = ""
     if k == "vol_amplifier" and amp_neg:
         amp_badge = ('<div class="lpi-amp-badge">' + amp_src + ' negative gamma — '
@@ -1113,22 +1367,38 @@ for k in lpi_order:
         + '<div class="lpi-factor">'
         + '<div class="lpi-factor-top"><span class="lpi-factor-lbl">' + lbl + '</span>'
         + '<span class="lpi-factor-val" style="color:' + bcol + '">' + vtxt + arr + '</span></div>'
+        + raw_line
         + '<div class="lpi-track"><div class="lpi-fill" style="width:' + wpct + '%;background:' + bcol + '"></div></div>'
+        + chip_line
+        + spark_line
+        + cmt_line
         + amp_badge
         + '</div>')
-
-
-def _fmt_raw(k, fmt, *args):
-    return fmt.format(*args) if lpi_ok.get(k) else "N/A"
-s_lpi_sofr   = _fmt_raw("short_rate", "{:.2f}%", lpi_raw.get("short_rate", 0))
-s_lpi_iss    = _fmt_raw("duration_supply", "${:.0f}B", lpi_raw.get("duration_supply", 0))
-s_lpi_netliq = _fmt_raw("net_liquidity", "${:.2f}T", lpi_raw.get("net_liquidity", 0))
-s_lpi_vix    = _fmt_raw("vol_amplifier", "{:.1f}", lpi_raw.get("vol_amplifier", 0))
 
 j_lpi_d = json.dumps(lpi_hist_dates)
 j_lpi_v = json.dumps(lpi_hist_vals)
 j_lpi_fd = json.dumps(lpi_full_dates)
 j_lpi_fv = json.dumps(lpi_full_vals)
+
+# --- Phase 6 serialization (decomposition, sparklines, clock, tail, stress) --
+_decomp_dates = lpi_hist_dates[-52:] if lpi_hist_dates else []
+j_decomp = json.dumps({
+    "dates": _decomp_dates,
+    "order": lpi_order,
+    "labels": {k: lpi_labels[k] for k in lpi_order},
+    "colors": FACTOR_SPARK_COL,
+    "series": lpi_decomp,
+}, separators=(",", ":")).replace("</", "<\\/")
+j_spark = json.dumps({
+    "series": lpi_spark,
+    "colors": FACTOR_SPARK_COL,
+    "cur": {k: (float(lpi_pct[k].dropna().iloc[-1]) if lpi_ok.get(k) else None) for k in lpi_order},
+}, separators=(",", ":")).replace("</", "<\\/")
+j_clock = json.dumps(clock_pts, separators=(",", ":")).replace("</", "<\\/")
+j_tailchart = json.dumps(tailchart, separators=(",", ":")).replace("</", "<\\/")
+j_stress_top3 = json.dumps(stress_top3, separators=(",", ":")).replace("</", "<\\/")
+j_stress_cal = json.dumps(stress_cal, separators=(",", ":")).replace("</", "<\\/")
+j_today = json.dumps(today_iso)
 
 # --- Tail table HTML ---
 def _pct(x, dp=1):
@@ -1149,10 +1419,13 @@ if tail_ok:
                 tail_rows_html += ('<tr' + rcls + '><td>' + label + '</td><td>' + str(h) + 'w</td>'
                                    + '<td colspan="6" style="color:#64748b">insufficient</td></tr>')
                 continue
+            thin = (key != "ALL" and st["n"] < TAIL_MIN_N)
+            n_txt = (str(st["n"]) + ' <span class="tail-thin" title="thin sample (N&lt;'
+                     + str(TAIL_MIN_N) + ')">&#9888;</span>') if thin else str(st["n"])
             tail_rows_html += ('<tr' + rcls + '>'
                 + '<td>' + label + '</td>'
                 + '<td>' + str(h) + 'w</td>'
-                + '<td>' + str(st["n"]) + '</td>'
+                + '<td>' + n_txt + '</td>'
                 + '<td>' + _pct(st["mean_ret"] * 100) + '</td>'
                 + '<td>' + _pct(st["med_ret"] * 100) + '</td>'
                 + '<td>' + _pctu(st["vol"] * 100.0) + '</td>'
@@ -1476,6 +1749,17 @@ parts.append('.lpi-factor-lbl{font-size:10px;color:#94a3b8;letter-spacing:.03em}
 parts.append('.lpi-factor-val{font-size:18px;font-weight:700}')
 parts.append('.lpi-track{height:6px;border-radius:3px;background:#0a0c10;overflow:hidden}')
 parts.append('.lpi-fill{height:100%;border-radius:3px}')
+parts.append('.fx-raw{font-size:12px;color:#cbd5e1;margin:-2px 0 8px}')
+parts.append('.fx-raw b{color:#e2e8f0;font-size:13px}')
+parts.append('.fx-unit{font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.03em}')
+parts.append('.fx-chips{font-size:10px;color:#64748b;margin:8px 0 2px}')
+parts.append('.fx-chg{font-weight:700;font-size:10px}')
+parts.append('.fx-spark{width:100%;height:40px;margin:2px 0}')
+parts.append('.fx-cmt{font-size:10px;color:#94a3b8;line-height:1.45;margin-top:6px}')
+parts.append('.fx-cmt-cn{color:#64748b}')
+parts.append('.regime-clock{width:100%;height:210px}')
+parts.append('.tail-thin{color:#f59e0b;cursor:help}')
+parts.append('#chart-tail,#chart-stress-cal{width:100%}')
 parts.append('.tail-wrap{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px 16px;margin-bottom:12px;overflow-x:auto}')
 parts.append('.tail-title{font-size:12px;font-weight:700;color:#e2e8f0;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}')
 parts.append('.tail-readout{font-size:12px;color:#cbd5e1;line-height:1.5;margin-bottom:10px;background:#0f131b;border-left:3px solid #6366f1;padding:8px 11px;border-radius:0 6px 6px 0}')
@@ -1616,8 +1900,9 @@ parts.append('<div class="regime-box"><div class="rb-title">Regime &middot; 状�
              + '<div class="regime-delta">&Delta;LPI 13w <b style="color:#e2e8f0">' + s_d13
              + '</b> &middot; &Delta;LPI 4w <b style="color:#e2e8f0">' + s_d4
              + '</b> &middot; breadth ' + breadth_txt + '</div></div>')
-parts.append('<div class="regime-box"><div class="rb-title">Level × Direction</div>'
-             + '<div class="mtx">' + mtx_html + '</div></div>')
+parts.append('<div class="regime-box"><div class="rb-title">Regime Clock &middot; '
+             + 'LPI level × &Delta;13w</div>'
+             + '<div id="chart-regime-clock" class="regime-clock"></div></div>')
 parts.append('</div>')
 
 # sub-factor bars (with 4w direction arrows)
@@ -1633,10 +1918,18 @@ if tail_ok:
                  + '<th>LPI band</th><th>Horizon</th><th>N</th><th>Mean ret</th><th>Median</th>'
                  + '<th>Fwd vol (ann.)</th><th>P(&lt;-5%)</th><th>P(&lt;-10%)</th><th>Avg MaxDD</th>'
                  + '</tr></thead><tbody>' + tail_rows_html + '</tbody></table>')
+    if tailchart.get("ok"):
+        parts.append('<div class="chart-title" style="margin-top:14px">Drawdown probability by LPI band '
+                     '&mdash; 90% block-bootstrap CI</div>')
+        parts.append('<div id="chart-tail"></div>')
     parts.append('<div class="tail-foot">Forward windows overlap weekly, which inflates effective N '
                  '(observations are not independent). Max drawdown uses weekly closes and therefore '
                  'understates intraweek troughs. Percentiles feeding each week&rsquo;s LPI are expanding '
-                 'and strictly causal (no look-ahead); forward returns are realized outcomes.</div>')
+                 'and strictly causal (no look-ahead); forward returns are realized outcomes. '
+                 'Chart CIs are 90% (5th&ndash;95th pct) from a circular block bootstrap of the '
+                 'weekly forward-return series within each band (block length = horizon in weeks '
+                 'to respect overlapping-window autocorrelation, 1500 resamples); bands with '
+                 'N&lt;30 are merged upward for the chart and flagged &#9888; in the table.</div>')
     parts.append('</div>')
 else:
     parts.append('<div class="tail-wrap"><div class="tail-title">Conditional Tail Table</div>'
@@ -1653,7 +1946,11 @@ parts.append('<div class="chart-subtitle">' + str(recon_n) + ' weeks from ' + re
 parts.append('<div id="chart-lpi-full"></div></div>')
 parts.append('</div>')
 
-# stress calendar
+# stress calendar — timeline + text legend
+parts.append('<div class="chart-card" style="margin:0 0 10px">'
+             + '<div class="chart-title">2026 H2 Stress Calendar &middot; 压力日历</div>'
+             + '<div class="chart-subtitle">severity-sized markers &middot; today cursor</div>'
+             + '<div id="chart-stress-cal"></div></div>')
 parts.append('<div class="lpi-cal">')
 parts.append('<b>2026 H2 压力日历 (projected stress calendar)</b><br>')
 parts.append('<span class="hot">Sep (~79th pct):</span> FOMC Sep 15-16 &middot; corp estimated tax Sep 15 &middot; quarter-end TGA refill Sep 30 &mdash; 4 simultaneous drains<br>')
@@ -1864,14 +2161,26 @@ parts.append('  {x:' + j_rd + ',y:' + j_rf + ',type:"scatter",mode:"lines",line:
 parts.append('],Object.assign({},T,{showlegend:false}),CFG);')
 parts.append('var t60={type:"line",x0:0,x1:1,xref:"paper",y0:60,y1:60,line:{color:"#f97316",width:1,dash:"dash"}};')
 parts.append('var t80={type:"line",x0:0,x1:1,xref:"paper",y0:80,y1:80,line:{color:"#ef4444",width:1,dash:"dash"}};')
+parts.append('var zoneAmber={type:"rect",xref:"paper",x0:0,x1:1,yref:"y",y0:60,y1:80,fillcolor:"rgba(245,158,11,0.07)",line:{width:0},layer:"below"};')
+parts.append('var zoneRed={type:"rect",xref:"paper",x0:0,x1:1,yref:"y",y0:80,y1:100,fillcolor:"rgba(239,68,68,0.09)",line:{width:0},layer:"below"};')
 parts.append('var lpiD=' + j_lpi_d + ',lpiV=' + j_lpi_v + ';')
-parts.append('if(lpiD.length){')
+parts.append('var DEC=' + j_decomp + ';')
+parts.append('if(DEC.dates&&DEC.dates.length){')
+parts.append('  function hx2rgba(h,a){var n=parseInt(h.slice(1),16);return "rgba("+((n>>16)&255)+","+((n>>8)&255)+","+(n&255)+","+a+")";}')
+parts.append('  var decTraces=DEC.order.map(function(k){return {x:DEC.dates,y:DEC.series[k],type:"scatter",mode:"lines",stackgroup:"one",name:DEC.labels[k],line:{width:0.5,color:DEC.colors[k]},fillcolor:hx2rgba(DEC.colors[k],0.55),hovertemplate:"%{x}<br>"+DEC.labels[k]+" %{y:.1f}<extra></extra>"};});')
+parts.append('  var decSum=DEC.dates.map(function(_,i){return DEC.order.reduce(function(a,k){return a+DEC.series[k][i];},0);});')
+parts.append('  decTraces.push({x:DEC.dates,y:decSum,type:"scatter",mode:"lines",name:"LPI composite",line:{color:"#e2e8f0",width:2.2},hovertemplate:"%{x}<br>LPI %{y:.1f}<extra></extra>"});')
+parts.append('  Plotly.newPlot("chart-lpi",decTraces,')
+parts.append('    Object.assign({},T,{shapes:[zoneAmber,zoneRed,t60,t80],showlegend:true,legend:{orientation:"h",font:{size:8},y:-0.18,x:0},margin:{l:40,r:8,t:8,b:56},yaxis:Object.assign({},T.yaxis,{range:[0,100]}),xaxis:Object.assign({},T.xaxis,{type:"date"})}),CFG);')
+parts.append('}else if(lpiD.length){')
 parts.append('  Plotly.newPlot("chart-lpi",[{x:lpiD,y:lpiV,type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.08)"}],')
-parts.append('    Object.assign({},T,{shapes:[t60,t80],yaxis:Object.assign({},T.yaxis,{range:[0,100]})}),CFG);')
+parts.append('    Object.assign({},T,{shapes:[zoneAmber,zoneRed,t60,t80],yaxis:Object.assign({},T.yaxis,{range:[0,100]})}),CFG);')
 parts.append('}else{document.getElementById("chart-lpi").innerHTML="<div style=\\"color:#64748b;font-size:11px;padding:20px 0\\">History unavailable</div>";}')
 parts.append('var lpiFD=' + j_lpi_fd + ',lpiFV=' + j_lpi_fv + ';')
+parts.append('var STRESS3=' + j_stress_top3 + ';')
 parts.append('if(lpiFD.length){')
-parts.append('  var Tf=Object.assign({},T,{shapes:[t60,t80],yaxis:Object.assign({},T.yaxis,{range:[0,100]}),')
+parts.append('  var stressAnn=STRESS3.map(function(s){return {x:s.d,y:s.v,xref:"x",yref:"y",text:(s.tag?s.tag+"<br>":"")+s.d+" ("+s.v.toFixed(1)+")",showarrow:true,arrowhead:2,arrowsize:0.7,arrowcolor:"#f87171",ax:0,ay:-26,font:{size:8,color:"#fca5a5"},bgcolor:"rgba(20,23,32,0.78)",bordercolor:"#7f1d1d",borderwidth:1,borderpad:2};});')
+parts.append('  var Tf=Object.assign({},T,{shapes:[zoneAmber,zoneRed,t60,t80],annotations:stressAnn,yaxis:Object.assign({},T.yaxis,{range:[0,100]}),')
 parts.append('    xaxis:Object.assign({},T.xaxis,{fixedrange:false,rangeselector:{buttons:[')
 parts.append('      {count:1,label:"1y",step:"year",stepmode:"backward"},')
 parts.append('      {count:3,label:"3y",step:"year",stepmode:"backward"},')
@@ -1926,8 +2235,89 @@ parts.append('    yaxis2:{overlaying:"y",side:"right",range:[0,100],showgrid:fal
 parts.append('  Plotly.newPlot("cot-chart-"+k,traces,lay,CFG);')
 parts.append('  cotChartIds.push("cot-chart-"+k);')
 parts.append('});')
+# Phase 6 — factor score sparklines (tiny, no axes, last point highlighted)
+parts.append('var SPK=' + j_spark + ';var sparkIds=[];')
+parts.append('Object.keys(SPK.series).forEach(function(k){')
+parts.append('  var el=document.getElementById("spark-"+k);if(!el)return;')
+parts.append('  var y=SPK.series[k];if(!y||!y.length){el.style.display="none";return;}')
+parts.append('  var x=y.map(function(_,i){return i;});var col=SPK.colors[k]||"#6366f1";')
+parts.append('  var last=y.length-1;')
+parts.append('  var mk=y.map(function(_,i){return i===last?4:0;});')
+parts.append('  var mc=y.map(function(){return col;});')
+parts.append('  Plotly.newPlot("spark-"+k,[')
+parts.append('    {x:x,y:y,type:"scatter",mode:"lines",line:{color:col,width:1.4},hoverinfo:"skip"},')
+parts.append('    {x:[last],y:[y[last]],type:"scatter",mode:"markers",marker:{color:col,size:4},hoverinfo:"skip"}],')
+parts.append('    {paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",showlegend:false,height:40,')
+parts.append('     margin:{l:0,r:0,t:2,b:2},xaxis:{visible:false,fixedrange:true,type:"linear"},')
+parts.append('     yaxis:{visible:false,fixedrange:true,type:"linear",range:[0,100]}},')
+parts.append('    {responsive:true,displayModeBar:false,staticPlot:true});')
+parts.append('  sparkIds.push("spark-"+k);')
+parts.append('});')
+# Phase 6 — regime clock snail trail
+parts.append('var CLK=' + j_clock + ';var clkIds=[];')
+parts.append('var clkEl=document.getElementById("chart-regime-clock");')
+parts.append('if(clkEl&&CLK.length){')
+parts.append('  var n=CLK.length;var xs=CLK.map(function(p){return p.x;});var ys=CLK.map(function(p){return p.y;});')
+parts.append('  var ymax=Math.max(5,Math.ceil(Math.max.apply(null,ys.map(Math.abs))/5)*5);')
+parts.append('  var trail=[];')
+parts.append('  for(var i=0;i<n-1;i++){var op=0.15+0.55*(i/(n-1));trail.push({x:[xs[i],xs[i+1]],y:[ys[i],ys[i+1]],type:"scatter",mode:"lines",line:{color:"rgba(148,163,184,"+op.toFixed(2)+")",width:1.4},hoverinfo:"skip",showlegend:false});}')
+parts.append('  trail.push({x:xs.slice(0,n-1),y:ys.slice(0,n-1),type:"scatter",mode:"markers",marker:{color:"#64748b",size:4,opacity:0.5},hovertemplate:"%{text}<br>LPI %{x:.1f} / d13 %{y:+.1f}<extra></extra>",text:CLK.slice(0,n-1).map(function(p){return p.d;}),showlegend:false});')
+parts.append('  var cur=CLK[n-1];')
+parts.append('  trail.push({x:[cur.x],y:[cur.y],type:"scatter",mode:"markers+text",marker:{color:"#e2e8f0",size:11,line:{color:"#6366f1",width:2}},text:["now"],textposition:"top center",textfont:{size:9,color:"#e2e8f0"},hovertemplate:cur.d+"<br>LPI %{x:.1f} / d13 %{y:+.1f}<extra></extra>",showlegend:false});')
+parts.append('  var qann=[')
+parts.append('    {x:30,y:ymax*0.82,text:"Inflection watch<br>拐点观察",showarrow:false,font:{size:8,color:"#f59e0b"}},')
+parts.append('    {x:82,y:ymax*0.82,text:"Danger zone<br>危险区",showarrow:false,font:{size:8,color:"#ef4444"}},')
+parts.append('    {x:30,y:-ymax*0.82,text:"Cushion thick<br>缓冲厚",showarrow:false,font:{size:8,color:"#10b981"}},')
+parts.append('    {x:82,y:-ymax*0.82,text:"Decompress<br>减压",showarrow:false,font:{size:8,color:"#14b8a6"}}];')
+parts.append('  var clkShapes=[{type:"line",x0:60,x1:60,yref:"y",y0:-ymax,y1:ymax,line:{color:"#475569",width:1,dash:"dot"}},')
+parts.append('    {type:"line",x0:0,x1:100,xref:"x",y0:0,y1:0,line:{color:"#475569",width:1,dash:"dot"}}];')
+parts.append('  Plotly.newPlot("chart-regime-clock",trail,')
+parts.append('    Object.assign({},T,{height:210,shapes:clkShapes,annotations:qann,margin:{l:36,r:10,t:8,b:30},')
+parts.append('     xaxis:{type:"linear",range:[0,100],gridcolor:"#1e2433",zerolinecolor:"#2d3748",tickfont:{size:8},fixedrange:true,title:{text:"LPI level",font:{size:8}}},')
+parts.append('     yaxis:{type:"linear",range:[-ymax,ymax],gridcolor:"#1e2433",zerolinecolor:"#2d3748",tickfont:{size:8},fixedrange:true,title:{text:"\\u0394 13w",font:{size:8}}}}),CFG);')
+parts.append('  clkIds.push("chart-regime-clock");')
+parts.append('}else if(clkEl){clkEl.innerHTML="<div style=\\"color:#64748b;font-size:11px;padding:20px 0\\">Clock unavailable</div>";}')
+# Phase 6 — tail drawdown probability grouped bars with bootstrap CI error bars
+parts.append('var TC=' + j_tailchart + ';var tailIds=[];')
+parts.append('var tcEl=document.getElementById("chart-tail");')
+parts.append('if(tcEl&&TC.ok&&TC.bands&&TC.bands.length){')
+parts.append('  var labs=TC.bands.map(function(b){return b.label;});')
+parts.append('  function series(field,hz){return TC.bands.map(function(b){return b[field][hz][0];});}')
+parts.append('  function errs(field,hz){return {type:"data",symmetric:false,array:TC.bands.map(function(b){return b[field][hz][2]-b[field][hz][0];}),arrayminus:TC.bands.map(function(b){return b[field][hz][0]-b[field][hz][1];}),color:"rgba(226,232,240,0.5)",thickness:1,width:2};}')
+parts.append('  function lineWid(){return TC.bands.map(function(b){return b.current?2:0;});}')
+parts.append('  function lineCol(base){return TC.bands.map(function(b){return b.current?"#e2e8f0":base;});}')
+parts.append('  var tt=[')
+parts.append('    {x:labs,y:series("p5","4"),name:"P(>5%) 4w",type:"bar",marker:{color:"rgba(245,158,11,0.7)",line:{color:lineCol("rgba(245,158,11,0.7)"),width:lineWid()}},error_y:errs("p5","4")},')
+parts.append('    {x:labs,y:series("p5","8"),name:"P(>5%) 8w",type:"bar",marker:{color:"rgba(249,115,22,0.75)",line:{color:lineCol("rgba(249,115,22,0.75)"),width:lineWid()}},error_y:errs("p5","8")},')
+parts.append('    {x:labs,y:series("p10","4"),name:"P(>10%) 4w",type:"bar",marker:{color:"rgba(239,68,68,0.7)",line:{color:lineCol("rgba(239,68,68,0.7)"),width:lineWid()}},error_y:errs("p10","4")},')
+parts.append('    {x:labs,y:series("p10","8"),name:"P(>10%) 8w",type:"bar",marker:{color:"rgba(185,28,28,0.85)",line:{color:lineCol("rgba(185,28,28,0.85)"),width:lineWid()}},error_y:errs("p10","8")}];')
+parts.append('  var tcShapes=[];')
+parts.append('  if(TC.baseline){var bl=[["p5_8","#f59e0b"],["p10_8","#ef4444"]];bl.forEach(function(p){if(TC.baseline[p[0]]!=null){tcShapes.push({type:"line",xref:"paper",x0:0,x1:1,yref:"y",y0:TC.baseline[p[0]],y1:TC.baseline[p[0]],line:{color:p[1],width:1,dash:"dot"}});}});}')
+parts.append('  Plotly.newPlot("chart-tail",tt,')
+parts.append('    Object.assign({},T,{barmode:"group",height:210,showlegend:true,legend:{orientation:"h",font:{size:8},y:-0.22,x:0},margin:{l:40,r:10,t:8,b:60},shapes:tcShapes,')
+parts.append('     xaxis:{type:"category",gridcolor:"#1e2433",tickfont:{size:9},fixedrange:true},')
+parts.append('     yaxis:Object.assign({},T.yaxis,{title:{text:"probability %",font:{size:9}}})}),CFG);')
+parts.append('  tailIds.push("chart-tail");')
+parts.append('}')
+# Phase 6 — stress calendar timeline (Jul-Dec 2026, today cursor)
+parts.append('var SC=' + j_stress_cal + ';var today=' + j_today + ';var scIds=[];')
+parts.append('var scEl=document.getElementById("chart-stress-cal");')
+parts.append('if(scEl&&SC.length){')
+parts.append('  var scTrace={x:SC.map(function(m){return m.d;}),y:SC.map(function(){return 0;}),type:"scatter",mode:"markers+text",')
+parts.append('    marker:{color:SC.map(function(m){return m.color;}),size:SC.map(function(m){return m.size;}),line:{color:"#0d0f14",width:1}},')
+parts.append('    text:SC.map(function(m){return m.label;}),textposition:"top center",textfont:{size:8,color:"#cbd5e1"},')
+parts.append('    hovertemplate:"%{x}<br>%{text}<extra></extra>"};')
+parts.append('  var scShapes=[{type:"line",xref:"x",x0:today,x1:today,yref:"paper",y0:0,y1:1,line:{color:"#e2e8f0",width:1.5,dash:"dash"}},')
+parts.append('    {type:"line",xref:"paper",x0:0,x1:1,yref:"y",y0:0,y1:0,line:{color:"#334155",width:1}}];')
+parts.append('  var scAnn=[{x:today,y:0.9,yref:"paper",text:"today",showarrow:false,font:{size:8,color:"#e2e8f0"},xanchor:"left"}];')
+parts.append('  Plotly.newPlot("chart-stress-cal",[scTrace],')
+parts.append('    Object.assign({},T,{height:130,margin:{l:10,r:10,t:24,b:24},shapes:scShapes,annotations:scAnn,')
+parts.append('     xaxis:{type:"date",range:["2026-06-25","2026-12-15"],gridcolor:"#1e2433",tickformat:"%b",dtick:"M1",tickfont:{size:9},fixedrange:true},')
+parts.append('     yaxis:{visible:false,range:[-1,1.6],fixedrange:true,type:"linear"}}),CFG);')
+parts.append('  scIds.push("chart-stress-cal");')
+parts.append('}')
 parts.append('window.addEventListener("resize",function(){')
-parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda","chart-hgex-spy"].concat(cotChartIds).forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
+parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda","chart-hgex-spy"].concat(cotChartIds).concat(sparkIds).concat(clkIds).concat(tailIds).concat(scIds).forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
 parts.append('});')
 parts.append('})();')
 parts.append('</script></body></html>')
