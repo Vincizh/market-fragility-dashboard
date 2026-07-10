@@ -177,7 +177,7 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="header"><div class="header-left">
 <h1>De-Lever Signal Dashboard <span>/ NDX</span></h1>
 <p>3-layer risk stack: fragility · crowding · amplifiers &middot; auto-updated every hour</p></div>
-<div class="header-right"><div class="timestamp">Last updated: 2026-07-10 05:08 UTC</div></div></div>
+<div class="header-right"><div class="timestamp">Last updated: 2026-07-10 05:13 UTC</div></div></div>
 <div class="summary-strip">
 <div class="summary-cell"><div class="lbl">Fragility · LPI + Regime</div><div class="val" style="color:#f59e0b">57.2 <span style="color:#10b981">Falling</span></div><div class="sub">Cushion thick, stable — full risk budget</div></div>
 <div class="summary-cell"><div class="lbl">Crowding · Basis-Trade Proxy</div><div class="val" style="color:#ef4444">93</div><div class="sub">Basis trade crowded — issuance shocks amplified</div></div>
@@ -185,7 +185,7 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 </div>
 <div class="takeaway">
 <div class="takeaway-title">关键结论 Key Takeaway <span>rule-based · sizing &amp; hedging only</span></div>
-<div class="takeaway-ts">generated 2026-07-10 05:08 UTC &middot; deterministic (no forecast)</div>
+<div class="takeaway-ts">generated 2026-07-10 05:13 UTC &middot; deterministic (no forecast)</div>
 <div class="takeaway-body">
 <div>Fragility: LPI 57 (Low · Falling), ΔLPI 13w -6.9, breadth 0/4 factors elevated-and-rising. In band 40-60, 8-week P(>10% drawdown) was 9.2% vs 8.5% baseline.</div>
 <div>Crowding: basis-trade proxy 93 (basis trade crowded — issuance shocks amplified); most-extreme equity positioning Nasdaq-100 at 0th pctile (z -2.3).</div>
@@ -264,8 +264,8 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="signal-badge badge-green">CONTANGO ✅</div></div>
 <div class="signal-card green">
 <div class="signal-label">&#9313; Crypto Funding (Binance)</div>
-<div class="signal-value green">BTC +0.4632%</div>
-<div class="signal-sub">ETH +0.7035% &middot; OKX BTC +0.0050%</div>
+<div class="signal-value green">BTC +0.4527%</div>
+<div class="signal-sub">ETH +0.6750% &middot; OKX BTC +0.0050%</div>
 <div class="signal-badge badge-green">BOTH POSITIVE ✅ — Risk appetite returning</div></div>
 <div class="signal-card red">
 <div class="signal-label">&#9314; CTA Proxy (CFTC COT)</div>
@@ -291,7 +291,7 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="chart-subtitle">strike profile unavailable this run</div>
 </div>
 </div>
-<script id="hgex-state" type="application/json">{"SPY":{"2026-07-09":{"net_gex":10.085199750746488,"flip":751.1428224880423,"spot":751.7100219726562,"n_expiries":10,"n_contracts":2010},"2026-07-10":{"net_gex":5.376674315820003e-05,"flip":null,"spot":751.7100219726562,"n_expiries":10,"n_contracts":1}},"QQQ":{"2026-07-09":{"net_gex":2.2613432975346384,"flip":723.4443390608225,"spot":723.280029296875,"n_expiries":10,"n_contracts":2088},"2026-07-10":{"net_gex":9.866556176518952e-06,"flip":null,"spot":723.280029296875,"n_expiries":10,"n_contracts":4}}}</script>
+<script id="hgex-state" type="application/json">{"SPY":{"2026-07-09":{"net_gex":10.085199750746488,"flip":751.1428224880423,"spot":751.7100219726562,"n_expiries":10,"n_contracts":2010},"2026-07-10":{"net_gex":5.376586021990348e-05,"flip":null,"spot":751.7100219726562,"n_expiries":10,"n_contracts":1}},"QQQ":{"2026-07-09":{"net_gex":2.2613432975346384,"flip":723.4443390608225,"spot":723.280029296875,"n_expiries":10,"n_contracts":2088},"2026-07-10":{"net_gex":9.866848016975973e-06,"flip":null,"spot":723.280029296875,"n_expiries":10,"n_contracts":4}}}</script>
 <div class="gex-section">
 <div class="gex-heading">GEX Monitor <span>做市商伽马监控 (Dealer Gamma)</span></div>
 <div class="gex-note-box">FlashAlpha API key not configured &mdash; GEX monitor idle. Set <b>FLASHALPHA_API_KEY</b> to enable.</div>
@@ -355,7 +355,7 @@ if(DEC.dates&&DEC.dates.length){
   var decSum=DEC.dates.map(function(_,i){return DEC.order.reduce(function(a,k){return a+DEC.series[k][i];},0);});
   decTraces.push({x:DEC.dates,y:decSum,type:"scatter",mode:"lines",name:"LPI composite",line:{color:"#e2e8f0",width:2.2},hovertemplate:"%{x}<br>LPI %{y:.1f}<extra></extra>"});
   Plotly.newPlot("chart-lpi",decTraces,
-    Object.assign({},T,{shapes:[zoneAmber,zoneRed,t60,t80],showlegend:true,legend:{orientation:"h",font:{size:8},y:-0.18,x:0},margin:{l:40,r:8,t:8,b:56},yaxis:Object.assign({},T.yaxis,{range:[0,100]}),xaxis:Object.assign({},T.xaxis,{type:"date"})}),CFG);
+    Object.assign({},T,{shapes:[zoneAmber,zoneRed,t60,t80],showlegend:true,legend:{orientation:"h",font:{size:8},y:-0.18,x:0},margin:{l:40,r:8,t:8,b:56},yaxis:Object.assign({},T.yaxis,{range:[0,100],autorange:false}),xaxis:Object.assign({},T.xaxis,{type:"date"})}),CFG);
 }else if(lpiD.length){
   Plotly.newPlot("chart-lpi",[{x:lpiD,y:lpiV,type:"scatter",mode:"lines",line:{color:"#6366f1",width:2},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.08)"}],
     Object.assign({},T,{shapes:[zoneAmber,zoneRed,t60,t80],yaxis:Object.assign({},T.yaxis,{range:[0,100]})}),CFG);
@@ -366,8 +366,8 @@ if(lpiFD.length){
   var stressOrd=STRESS3.map(function(s,i){return i;}).sort(function(a,b){return STRESS3[a].d<STRESS3[b].d?-1:1;});
   var stAy={},stAx={},stH=[-40,-78,-58],stX=[-26,2,28];
   stressOrd.forEach(function(idx,rank){stAy[idx]=stH[rank%stH.length];stAx[idx]=stX[rank%stX.length];});
-  var stressAnn=STRESS3.map(function(s,i){return {x:s.d,y:s.v,xref:"x",yref:"y",yanchor:"top",text:(s.tag?s.tag+"<br>":"")+s.d+" ("+s.v.toFixed(1)+")",showarrow:true,arrowhead:2,arrowsize:0.7,arrowcolor:"#f87171",ax:stAx[i],ay:stAy[i],font:{size:8,color:"#fca5a5"},bgcolor:"rgba(20,23,32,0.85)",bordercolor:"#7f1d1d",borderwidth:1,borderpad:2};});
-  var Tf=Object.assign({},T,{height:220,margin:{l:40,r:8,t:70,b:40},shapes:[zoneAmber,zoneRed,t60,t80],annotations:stressAnn,yaxis:Object.assign({},T.yaxis,{range:[0,100]}),
+  var stressAnn=STRESS3.map(function(s,i){return {x:s.d,xref:"x",yref:"paper",y:s.v/105,yanchor:"top",text:(s.tag?s.tag+"<br>":"")+s.d+" ("+s.v.toFixed(1)+")",showarrow:true,arrowhead:2,arrowsize:0.7,arrowcolor:"#f87171",ax:stAx[i],ay:stAy[i],font:{size:8,color:"#fca5a5"},bgcolor:"rgba(20,23,32,0.85)",bordercolor:"#7f1d1d",borderwidth:1,borderpad:2};});
+  var Tf=Object.assign({},T,{height:220,margin:{l:40,r:8,t:70,b:40},shapes:[zoneAmber,zoneRed,t60,t80],annotations:stressAnn,yaxis:Object.assign({},T.yaxis,{range:[0,105],autorange:false}),
     xaxis:Object.assign({},T.xaxis,{fixedrange:false,rangeselector:{buttons:[
       {count:1,label:"1y",step:"year",stepmode:"backward"},
       {count:3,label:"3y",step:"year",stepmode:"backward"},
