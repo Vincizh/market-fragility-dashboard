@@ -784,6 +784,25 @@ if lpi_has:
                           "x": round(float(row["lpi"]), 2),
                           "y": round(float(row["d13"]), 2)})
 
+# --- Item 3b: quadrant occupancy over trailing 52 weeks (same axes as clock) -
+QUAD_DEFS = [
+    ("LL", "Cushion thick 缓冲厚", "#10b981"),
+    ("LR", "Inflection watch 拐点观察", "#f59e0b"),
+    ("HL", "Decompress 减压", "#14b8a6"),
+    ("HR", "Danger zone 危险区", "#ef4444"),
+]
+quad_occ = {q[0]: 0 for q in QUAD_DEFS}
+if lpi_has:
+    qs = lpi_series_full
+    qd13 = qs - qs.shift(13)
+    qdf = pd.DataFrame({"lpi": qs, "d13": qd13}).dropna().tail(52)
+    for _, r in qdf.iterrows():
+        lv = "H" if r["lpi"] >= 60 else "L"
+        dr = "R" if r["d13"] > 0 else "L"
+        quad_occ[lv + dr] += 1
+quad_total = sum(quad_occ.values())
+print("Quadrant occupancy (trailing {}w): {}".format(quad_total, quad_occ))
+
 # --- Item 4: block-bootstrap drawdown probabilities + min-N band merge -------
 def circular_block_bootstrap_probs(dd, block_len, thresholds=(-0.05, -0.10), B=1500, seed=20260710):
     """Circular block bootstrap of P(maxDD < threshold). Block length ~ horizon
@@ -1452,25 +1471,29 @@ s_d13 = ("{:+.1f}".format(dlpi_13w) if dlpi_13w == dlpi_13w else "N/A")
 s_d4  = ("{:+.1f}".format(dlpi_4w) if dlpi_4w == dlpi_4w else "N/A")
 breadth_txt = "{}/4 factors &gt;70th and rising".format(breadth)
 
-# 2x2 matrix quadrant highlight: rows High(top)/Low(bottom), cols Falling-Flat / Rising
+# Quadrant occupancy readout (trailing 52w), current regime highlighted.
 mtx_active = None
 if lpi_has:
     col = "R" if reg_dir == "Rising" else "L"
     mtx_active = reg_level[0] + col   # e.g. 'HR','HL','LR','LL'
-mtx_cells = [
-    ("HL", "High · Fall/Flat", "Decompress / stable", "#14b8a6"),
-    ("HR", "High · Rising", "Danger zone", "#ef4444"),
-    ("LL", "Low · Fall/Flat", "Cushion thick", "#10b981"),
-    ("LR", "Low · Rising", "Inflection watch", "#f59e0b"),
-]
-mtx_html = ""
-for cellkey, top, sub, ccol_ in mtx_cells:
-    active = (cellkey == mtx_active)
-    style = ("background:" + ccol_ + ";color:#0d0f14" if active
-             else "background:#0f131b;color:#64748b;border:1px solid #2d3748")
-    mtx_html += ('<div class="mtx-cell" style="' + style + '">'
-                 + '<div class="mtx-top">' + top + '</div>'
-                 + '<div class="mtx-sub">' + sub + '</div></div>')
+quad_html = ""
+if quad_total:
+    qmax = max(quad_occ.values()) or 1
+    ordered = sorted(QUAD_DEFS, key=lambda q: quad_occ[q[0]], reverse=True)
+    for qkey, qlabel, qcol in ordered:
+        wk = quad_occ[qkey]
+        wpx = int(round(100.0 * wk / qmax))
+        cur = (qkey == mtx_active)
+        row_style = ("background:rgba(99,102,241,.14);border:1px solid " + qcol) if cur else "border:1px solid transparent"
+        lbl_col = "#e2e8f0" if cur else "#94a3b8"
+        star = ' &#9679;' if cur else ''
+        quad_html += ('<div class="quad-row" style="' + row_style + '">'
+                      + '<span class="quad-lbl" style="color:' + lbl_col + '">' + qlabel + star + '</span>'
+                      + '<span class="quad-n">' + str(wk) + 'w</span>'
+                      + '<div class="quad-track"><div class="quad-fill" style="width:' + str(wpx)
+                      + '%;background:' + qcol + '"></div></div></div>')
+else:
+    quad_html = '<div style="color:#64748b;font-size:11px">History unavailable</div>'
 
 # --- COT crowding HTML ---
 def _cot_card(m):
@@ -1758,6 +1781,13 @@ parts.append('.fx-spark{width:100%;height:40px;margin:2px 0}')
 parts.append('.fx-cmt{font-size:10px;color:#94a3b8;line-height:1.45;margin-top:6px}')
 parts.append('.fx-cmt-cn{color:#64748b}')
 parts.append('.regime-clock{width:100%;height:210px}')
+parts.append('.quad-title{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px}')
+parts.append('.quad-list{display:flex;flex-direction:column;gap:5px}')
+parts.append('.quad-row{display:grid;grid-template-columns:1fr auto 78px;align-items:center;gap:8px;padding:4px 7px;border-radius:6px}')
+parts.append('.quad-lbl{font-size:11px}')
+parts.append('.quad-n{font-size:11px;color:#cbd5e1;font-weight:700;text-align:right}')
+parts.append('.quad-track{height:7px;border-radius:4px;background:#0a0c10;overflow:hidden}')
+parts.append('.quad-fill{height:100%;border-radius:4px}')
 parts.append('.tail-thin{color:#f59e0b;cursor:help}')
 parts.append('#chart-tail,#chart-stress-cal{width:100%}')
 parts.append('.tail-wrap{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:14px 16px;margin-bottom:12px;overflow-x:auto}')
@@ -1899,7 +1929,9 @@ parts.append('<div class="regime-box"><div class="rb-title">Regime &middot; 状�
              + '<div class="regime-msg" style="color:' + reg_col + '">' + reg_msg + '</div>'
              + '<div class="regime-delta">&Delta;LPI 13w <b style="color:#e2e8f0">' + s_d13
              + '</b> &middot; &Delta;LPI 4w <b style="color:#e2e8f0">' + s_d4
-             + '</b> &middot; breadth ' + breadth_txt + '</div></div>')
+             + '</b> &middot; breadth ' + breadth_txt + '</div>'
+             + '<div class="quad-title">Quadrant occupancy &middot; trailing ' + str(quad_total)
+             + 'w</div><div class="quad-list">' + quad_html + '</div></div>')
 parts.append('<div class="regime-box"><div class="rb-title">Regime Clock &middot; '
              + 'LPI level × &Delta;13w</div>'
              + '<div id="chart-regime-clock" class="regime-clock"></div></div>')
@@ -2179,7 +2211,10 @@ parts.append('}else{document.getElementById("chart-lpi").innerHTML="<div style=\
 parts.append('var lpiFD=' + j_lpi_fd + ',lpiFV=' + j_lpi_fv + ';')
 parts.append('var STRESS3=' + j_stress_top3 + ';')
 parts.append('if(lpiFD.length){')
-parts.append('  var stressAnn=STRESS3.map(function(s){return {x:s.d,y:s.v,xref:"x",yref:"y",text:(s.tag?s.tag+"<br>":"")+s.d+" ("+s.v.toFixed(1)+")",showarrow:true,arrowhead:2,arrowsize:0.7,arrowcolor:"#f87171",ax:0,ay:-26,font:{size:8,color:"#fca5a5"},bgcolor:"rgba(20,23,32,0.78)",bordercolor:"#7f1d1d",borderwidth:1,borderpad:2};});')
+parts.append('  var stressOrd=STRESS3.map(function(s,i){return i;}).sort(function(a,b){return STRESS3[a].d<STRESS3[b].d?-1:1;});')
+parts.append('  var stAy={},stAx={},stH=[-44,-104,-74],stX=[-24,4,26];')
+parts.append('  stressOrd.forEach(function(idx,rank){stAy[idx]=stH[rank%stH.length];stAx[idx]=stX[rank%stX.length];});')
+parts.append('  var stressAnn=STRESS3.map(function(s,i){return {x:s.d,y:s.v,xref:"x",yref:"y",text:(s.tag?s.tag+"<br>":"")+s.d+" ("+s.v.toFixed(1)+")",showarrow:true,arrowhead:2,arrowsize:0.7,arrowcolor:"#f87171",ax:stAx[i],ay:stAy[i],font:{size:8,color:"#fca5a5"},bgcolor:"rgba(20,23,32,0.85)",bordercolor:"#7f1d1d",borderwidth:1,borderpad:2};});')
 parts.append('  var Tf=Object.assign({},T,{shapes:[zoneAmber,zoneRed,t60,t80],annotations:stressAnn,yaxis:Object.assign({},T.yaxis,{range:[0,100]}),')
 parts.append('    xaxis:Object.assign({},T.xaxis,{fixedrange:false,rangeselector:{buttons:[')
 parts.append('      {count:1,label:"1y",step:"year",stepmode:"backward"},')
