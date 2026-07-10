@@ -177,10 +177,14 @@ def fetch_cot_series(ds, contract, kind):
     df = df.sort_values("date").set_index("date")
     df["oi"] = df["open_interest_all"].map(_num)
     if kind == "tff":
-        df["lev_net"] = df["lev_money_positions_long"].map(_num) - df["lev_money_positions_short"].map(_num)
-        df["am_net"]  = df["asset_mgr_positions_long"].map(_num) - df["asset_mgr_positions_short"].map(_num)
+        df["lev_long"]  = df["lev_money_positions_long"].map(_num)
+        df["lev_short"] = df["lev_money_positions_short"].map(_num)
+        df["lev_net"]   = df["lev_long"] - df["lev_short"]
+        df["am_net"]    = df["asset_mgr_positions_long"].map(_num) - df["asset_mgr_positions_short"].map(_num)
     else:
-        df["mm_net"] = df["m_money_positions_long_all"].map(_num) - df["m_money_positions_short_all"].map(_num)
+        df["mm_long"]  = df["m_money_positions_long_all"].map(_num)
+        df["mm_short"] = df["m_money_positions_short_all"].map(_num)
+        df["mm_net"]   = df["mm_long"] - df["mm_short"]
     return df
 
 
@@ -270,6 +274,28 @@ try:
             rec["lev_short_pct"] = pct_of((-net).values, -cur)  # crowding of SHORT side
             rec["_am_series"] = df["am_net"]
             rec["_lev_series"] = net
+        # Phase 5: per-instrument weekly chart series (last 104 weeks).
+        # Percentile per week uses the SAME full-history methodology as the
+        # header chip (pct_of over the whole net series) so the last point
+        # equals the header percentile exactly.
+        rec["key"] = key
+        disp = net.tail(104)
+        long_col, short_col = ("lev_long", "lev_short") if kind == "tff" else ("mm_long", "mm_short")
+        long_s = df[long_col].tail(104)
+        short_s = df[short_col].tail(104)
+        full_vals = net.values
+
+        def _oi(x):
+            return int(round(x)) if x == x else None
+
+        rec["_chart"] = {
+            "dates": [d.strftime("%Y-%m-%d") for d in disp.index],
+            "long": [_oi(x) for x in long_s.tolist()],
+            "short": [(-_oi(x) if _oi(x) is not None else None) for x in short_s.tolist()],
+            "net": [_oi(x) for x in disp.tolist()],
+            "pctile": [round(pct_of(full_vals, v), 1) if v == v else None for v in disp.tolist()],
+            "z": round(rec["z"], 2) if rec["z"] == rec["z"] else None,
+        }
         cot_markets[key] = rec
         cot_matched[key] = matched
         print("  COT {} [{}] net={:,.0f} pct={:.0f} z={:.2f} d4={:+,.0f} as_of={}".format(
@@ -1038,6 +1064,8 @@ j_vd = json.dumps(vix_dates)
 j_vv = json.dumps(vix_vals_list)
 j_cd = json.dumps(cot_dates_list)
 j_cv = json.dumps(cot_vals_list)
+j_cot_charts = json.dumps({k: m["_chart"] for k, m in cot_markets.items() if "_chart" in m},
+                          separators=(",", ":")).replace("</", "<\\/")
 j_rd = json.dumps(corr_dates)
 j_rh = json.dumps(corr_hist)
 j_rf = json.dumps([0.5] * len(corr_dates))
@@ -1193,6 +1221,10 @@ def _cot_card(m):
     p.append('<div class="cot-track"><div class="cot-fill" style="width:'
              + ("{:.0f}".format(max(0, min(100, pct))) if pct == pct else "0")
              + '%;background:' + ("#ef4444" if pct == pct and pct >= 80 else "#6366f1") + '"></div></div>')
+    if m.get("_chart"):
+        p.append('<div class="cot-chart" id="cot-chart-' + m["key"] + '"></div>')
+    else:
+        p.append('<div class="cot-chart cot-chart-empty">chart data unavailable</div>')
     p.append('<div class="cot-foot">' + m["contract"] + '</div>')
     p.append('</div>')
     return "".join(p)
@@ -1474,6 +1506,8 @@ parts.append('.cot-metrics{display:flex;gap:14px;font-size:10px;color:#94a3b8;ma
 parts.append('.cot-metrics b{color:#e2e8f0}')
 parts.append('.cot-track{height:5px;border-radius:3px;background:#0a0c10;overflow:hidden}')
 parts.append('.cot-fill{height:100%;border-radius:3px}')
+parts.append('.cot-chart{width:100%;height:230px;margin:8px 0 2px}')
+parts.append('.cot-chart-empty{display:flex;align-items:center;justify-content:center;color:#475569;font-size:11px}')
 parts.append('.cot-foot{font-size:9px;color:#475569;margin-top:6px}')
 parts.append('.gex-section{margin:0 20px 16px}')
 parts.append('.gex-heading{font-size:13px;font-weight:700;color:#e2e8f0;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}')
@@ -1865,8 +1899,35 @@ parts.append('  if(hgFlip!==null){hgShapes.push({type:"line",x0:hgFlip,x1:hgFlip
 parts.append('  Plotly.newPlot("chart-hgex-spy",[{x:hgS,y:hgV,type:"bar",marker:{color:hgColors}}],')
 parts.append('    Object.assign({},T,{shapes:hgShapes,xaxis:Object.assign({},T.xaxis,{type:"linear",tickformat:"d"}),yaxis:Object.assign({},T.yaxis,{title:{text:"$bn/1%",font:{size:9}}})}),CFG);')
 parts.append('}')
+# Phase 5 — per-instrument COT weekly charts (diverging long/short bars,
+# bold net line, dashed percentile line on a right-hand 0-100 axis, z annotation).
+parts.append('var COTC=' + j_cot_charts + ';')
+parts.append('var cotChartIds=[];')
+parts.append('Object.keys(COTC).forEach(function(k){')
+parts.append('  var el=document.getElementById("cot-chart-"+k);if(!el)return;')
+parts.append('  var d=COTC[k];')
+parts.append('  if(!d||!d.dates||!d.dates.length){el.innerHTML="<div style=\\"color:#475569;font-size:11px;padding:20px 0\\">chart data unavailable</div>";return;}')
+parts.append('  var traces=[')
+parts.append('    {x:d.dates,y:d.long,type:"bar",name:"long",marker:{color:"rgba(16,185,129,0.42)"},hovertemplate:"%{x}<br>long %{y:,}<extra></extra>"},')
+parts.append('    {x:d.dates,y:d.short,type:"bar",name:"short",marker:{color:"rgba(239,68,68,0.42)"},hovertemplate:"%{x}<br>short %{y:,}<extra></extra>"},')
+parts.append('    {x:d.dates,y:d.net,type:"scatter",mode:"lines",name:"net",line:{color:"#e2e8f0",width:2},hovertemplate:"%{x}<br>net %{y:,}<extra></extra>"},')
+parts.append('    {x:d.dates,y:d.pctile,type:"scatter",mode:"lines",name:"pctile",yaxis:"y2",line:{color:"#f59e0b",width:1.5,dash:"dash"},hovertemplate:"%{x}<br>pctile %{y:.0f}<extra></extra>"}')
+parts.append('  ];')
+parts.append('  var ann=[];')
+parts.append('  if(d.z!==null&&d.z!==undefined){ann.push({xref:"paper",yref:"paper",x:0.02,y:0.98,xanchor:"left",yanchor:"top",text:"z "+(d.z>=0?"+":"")+d.z.toFixed(1),showarrow:false,font:{size:11,color:"#cbd5e1"},bgcolor:"rgba(20,23,32,0.72)"});}')
+parts.append('  var lastP=d.pctile.length?d.pctile[d.pctile.length-1]:null;')
+parts.append('  if(lastP!==null&&lastP!==undefined){ann.push({xref:"paper",yref:"paper",x:0.98,y:0.98,xanchor:"right",yanchor:"top",text:"pctl "+lastP.toFixed(0),showarrow:false,font:{size:10,color:"#f59e0b"}});}')
+parts.append('  var lay=Object.assign({},T,{barmode:"relative",height:230,hovermode:"x unified",')
+parts.append('    shapes:[{type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}}],')
+parts.append('    annotations:ann,')
+parts.append('    xaxis:Object.assign({},T.xaxis,{type:"date",tickangle:-30,nticks:6}),')
+parts.append('    yaxis:Object.assign({},T.yaxis,{title:{text:"contracts",font:{size:9}},zerolinecolor:"#475569"}),')
+parts.append('    yaxis2:{overlaying:"y",side:"right",range:[0,100],showgrid:false,zeroline:false,tickfont:{size:8,color:"#f59e0b"},fixedrange:true}});')
+parts.append('  Plotly.newPlot("cot-chart-"+k,traces,lay,CFG);')
+parts.append('  cotChartIds.push("cot-chart-"+k);')
+parts.append('});')
 parts.append('window.addEventListener("resize",function(){')
-parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda","chart-hgex-spy"].forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
+parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda","chart-hgex-spy"].concat(cotChartIds).forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
 parts.append('});')
 parts.append('})();')
 parts.append('</script></body></html>')
