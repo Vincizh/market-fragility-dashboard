@@ -933,10 +933,10 @@ def factor_commentary(k, score, direction, raw_txt):
 
 # --- Item 6: top-3 historical stress weeks (with causal tags) ---------------
 STRESS_EPISODES = [
-    ("2018-11", "QT tantrum 缩表恐慌"), ("2019-08", "repo crunch 回购紧张"),
-    ("2020-02", "COVID crash 疫情崩盘"), ("2020-03", "COVID crash 疫情崩盘"),
-    ("2008", "GFC 金融危机"), ("2011-08", "US downgrade 评级下调"),
-    ("2023-03", "SVB stress 银行压力"), ("2022", "hiking shock 加息冲击"),
+    ("2018-11", "QT 缩表"), ("2019-08", "repo 回购危机"),
+    ("2020-02", "COVID 疫情"), ("2020-03", "COVID 疫情"),
+    ("2008", "GFC 金融危机"), ("2011-08", "downgrade 评级"),
+    ("2023-03", "SVB 银行"), ("2022", "hikes 加息"),
 ]
 stress_top3 = []
 for d, v in top10[:3]:
@@ -2212,10 +2212,10 @@ parts.append('var lpiFD=' + j_lpi_fd + ',lpiFV=' + j_lpi_fv + ';')
 parts.append('var STRESS3=' + j_stress_top3 + ';')
 parts.append('if(lpiFD.length){')
 parts.append('  var stressOrd=STRESS3.map(function(s,i){return i;}).sort(function(a,b){return STRESS3[a].d<STRESS3[b].d?-1:1;});')
-parts.append('  var stAy={},stAx={},stH=[-44,-104,-74],stX=[-24,4,26];')
+parts.append('  var stAy={},stAx={},stH=[-40,-78,-58],stX=[-26,2,28];')
 parts.append('  stressOrd.forEach(function(idx,rank){stAy[idx]=stH[rank%stH.length];stAx[idx]=stX[rank%stX.length];});')
-parts.append('  var stressAnn=STRESS3.map(function(s,i){return {x:s.d,y:s.v,xref:"x",yref:"y",text:(s.tag?s.tag+"<br>":"")+s.d+" ("+s.v.toFixed(1)+")",showarrow:true,arrowhead:2,arrowsize:0.7,arrowcolor:"#f87171",ax:stAx[i],ay:stAy[i],font:{size:8,color:"#fca5a5"},bgcolor:"rgba(20,23,32,0.85)",bordercolor:"#7f1d1d",borderwidth:1,borderpad:2};});')
-parts.append('  var Tf=Object.assign({},T,{shapes:[zoneAmber,zoneRed,t60,t80],annotations:stressAnn,yaxis:Object.assign({},T.yaxis,{range:[0,100]}),')
+parts.append('  var stressAnn=STRESS3.map(function(s,i){return {x:s.d,y:s.v,xref:"x",yref:"y",yanchor:"top",text:(s.tag?s.tag+"<br>":"")+s.d+" ("+s.v.toFixed(1)+")",showarrow:true,arrowhead:2,arrowsize:0.7,arrowcolor:"#f87171",ax:stAx[i],ay:stAy[i],font:{size:8,color:"#fca5a5"},bgcolor:"rgba(20,23,32,0.85)",bordercolor:"#7f1d1d",borderwidth:1,borderpad:2};});')
+parts.append('  var Tf=Object.assign({},T,{height:220,margin:{l:40,r:8,t:70,b:40},shapes:[zoneAmber,zoneRed,t60,t80],annotations:stressAnn,yaxis:Object.assign({},T.yaxis,{range:[0,100]}),')
 parts.append('    xaxis:Object.assign({},T.xaxis,{fixedrange:false,rangeselector:{buttons:[')
 parts.append('      {count:1,label:"1y",step:"year",stepmode:"backward"},')
 parts.append('      {count:3,label:"3y",step:"year",stepmode:"backward"},')
