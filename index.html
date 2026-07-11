@@ -177,7 +177,7 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="header"><div class="header-left">
 <h1>Market Fragility Dashboard <span>/ NDX</span></h1>
 <p>3-layer risk stack: fragility · crowding · amplifiers &middot; auto-updated every hour</p></div>
-<div class="header-right"><div class="timestamp">Last updated: 2026-07-11 10:18 UTC</div></div></div>
+<div class="header-right"><div class="timestamp">Last updated: 2026-07-11 11:55 UTC</div></div></div>
 <div class="summary-strip">
 <div class="summary-cell"><div class="lbl">Fragility · LPI + Regime</div><div class="val" style="color:#f59e0b">44.9 <span style="color:#10b981">Falling</span></div><div class="sub">Cushion thick, stable — full risk budget</div></div>
 <div class="summary-cell"><div class="lbl">Crowding · Basis-Trade Proxy</div><div class="val" style="color:#ef4444">93</div><div class="sub">Basis trade crowded — issuance shocks amplified</div></div>
@@ -185,11 +185,11 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 </div>
 <div class="takeaway">
 <div class="takeaway-title">关键结论 Key Takeaway <span>rule-based · sizing &amp; hedging only</span></div>
-<div class="takeaway-ts">generated 2026-07-11 10:18 UTC &middot; deterministic (no forecast)</div>
+<div class="takeaway-ts">generated 2026-07-11 11:55 UTC &middot; deterministic (no forecast)</div>
 <div class="takeaway-body">
 <div>Fragility: LPI 45 (Low · Falling), ΔLPI 13w -15.9, breadth 0/4 factors elevated-and-rising. In band 40-60, 8-week P(>10% drawdown) was 9.2% vs 8.4% baseline.</div>
 <div>Crowding: basis-trade proxy 93 (basis trade crowded — issuance shocks amplified); most-extreme equity positioning Nasdaq-100 at 1th pctile (z -1.7).</div>
-<div>Amplifiers: dealer gamma positive / dampening via SPY GEX (homebrew); VIX term structure in contango; crypto funding positive; 5/5 de-lever signals confirmed.</div>
+<div>Amplifiers: dealer gamma positive / dampening via SPY GEX (homebrew, flip +0.5% vs spot); VIX term structure in contango; crypto funding positive; 5/5 de-lever signals confirmed.</div>
 </div>
 <div class="takeaway-stance" style="background:#f59e0b22;border-left:4px solid #f59e0b;color:#f59e0b">Stance: Cushion is thick today, but crowded basis positioning makes issuance events the tail to watch — keep calendar hedges around auction / refunding windows.<span class="tk-cn">保持仓位—关注基差</span></div>
 </div>
@@ -264,8 +264,8 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 <div class="signal-badge badge-green">CONTANGO ✅</div></div>
 <div class="signal-card green">
 <div class="signal-label">&#9313; Crypto Funding (Binance)</div>
-<div class="signal-value green">BTC +0.1197%</div>
-<div class="signal-sub">ETH +0.2265% &middot; OKX BTC -0.0014%</div>
+<div class="signal-value green">BTC +0.3585%</div>
+<div class="signal-sub">ETH +0.5204% &middot; OKX BTC +0.0011%</div>
 <div class="signal-badge badge-green">BOTH POSITIVE ✅ — Risk appetite returning</div></div>
 <div class="signal-card green">
 <div class="signal-label">&#9314; CTA Proxy (CFTC COT)</div>
@@ -285,13 +285,14 @@ table.tail tr.tail-hl td{background:rgba(99,102,241,.15);color:#e2e8f0;font-weig
 </div>
 <div class="gex-section">
 <div class="gex-heading">Index GEX (homebrew) <span>指数伽马 · SqueezeMetrics 约定 · $bn / 1% move</span></div>
-<div class="hgex-sig">De-lever signal #5 &mdash; Dealer Gamma &middot; source <b>SPY GEX (homebrew)</b> (+0.00 $bn/1%): <span class="green">POSITIVE ✅ dealers dampening</span></div>
-<div class="gex-cards"><div class="gex-card green"><div class="gex-card-head"><span class="gex-card-sym">SPY</span><span class="gex-fresh">live</span></div><div class="gex-card-val green">+0.00 <span style="font-size:11px;color:#64748b">$bn/1%</span></div><div class="gex-card-lbl">net GEX &middot; positive — dealers dampen vol</div><div class="gex-flip-txt">Spot 754.95 &middot; no gamma flip in range</div><div class="gex-card-lbl">gamma walls: 653 (+0.00)</div><div class="gex-card-foot">front 45d &middot; 10 exp &middot; 1 contracts</div><div class="gex-card-note" style="color:#64748b">accumulating history (3/60 days)</div></div><div class="gex-card green"><div class="gex-card-head"><span class="gex-card-sym">QQQ</span><span class="gex-fresh">live</span></div><div class="gex-card-val green">+5.76 <span style="font-size:11px;color:#64748b">$bn/1%</span></div><div class="gex-card-lbl">net GEX &middot; positive — dealers dampen vol</div><div class="gex-flip-txt">Flip 725.00 &middot; Spot 725.51 &middot; <span class="green">spot +0.1% above flip</span></div><div class="gex-card-lbl">gamma walls: 726 (+4.95), 730 (+0.37), 727 (+0.24)</div><div class="gex-flip-txt">call wall 726 &middot; put wall 715</div><div class="gex-card-foot">front 45d &middot; 10 exp &middot; 1375 contracts</div><div class="gex-card-note" style="color:#64748b">accumulating history (3/60 days)</div></div></div>
+<div class="hgex-sig">De-lever signal #5 &mdash; Dealer Gamma &middot; source <b>SPY GEX (homebrew)</b> (+4.10 $bn/1%): <span class="green">POSITIVE ✅ dealers dampening</span></div>
+<div class="gex-cards"><div class="gex-card green"><div class="gex-card-head"><span class="gex-card-sym">SPY</span><span class="gex-fresh">live</span></div><div class="gex-card-val green">+4.10 <span style="font-size:11px;color:#64748b">$bn/1%</span></div><div class="gex-card-lbl">net GEX &middot; positive — dealers dampen vol</div><div class="gex-flip-txt">Flip 758.55 &middot; Spot 754.95 &middot; <span class="red">spot -0.5% below flip</span></div><div class="gex-card-lbl">gamma walls: 757 (+1.57), 760 (+1.45), 758 (+0.72)</div><div class="gex-flip-txt">call wall 760 &middot; put wall 750</div><div class="gex-card-foot">front 45d &middot; 10 exp &middot; 2159 contracts</div><div class="gex-card-note" style="color:#64748b">accumulating history (3/60 days)</div></div><div class="gex-card green"><div class="gex-card-head"><span class="gex-card-sym">QQQ</span><span class="gex-fresh">live</span></div><div class="gex-card-val green">+0.05 <span style="font-size:11px;color:#64748b">$bn/1%</span></div><div class="gex-card-lbl">net GEX &middot; positive — dealers dampen vol</div><div class="gex-flip-txt">Flip 777.18 &middot; Spot 725.51 &middot; <span class="red">spot -6.6% below flip</span></div><div class="gex-card-lbl">gamma walls: 730 (+0.36), 740 (+0.35), 700 (-0.33)</div><div class="gex-flip-txt">call wall 730 &middot; put wall 700</div><div class="gex-card-foot">front 45d &middot; 10 exp &middot; 2242 contracts</div><div class="gex-card-note" style="color:#64748b">accumulating history (3/60 days)</div></div></div>
 <div class="chart-card" style="margin-bottom:12px"><div class="chart-title">SPY Net GEX by Strike (&plusmn;10% of spot)</div>
-<div class="chart-subtitle">strike profile unavailable this run</div>
+<div class="chart-subtitle">Green = positive gamma (dampening) &middot; red = negative &middot; dashed = spot, solid = gamma flip</div>
+<div id="chart-hgex-spy"></div>
 </div>
 </div>
-<script id="hgex-state" type="application/json">{"SPY":{"2026-07-09":{"net_gex":10.085199750746488,"flip":751.1428224880423,"spot":751.7100219726562,"n_expiries":10,"n_contracts":2010},"2026-07-10":{"net_gex":22.3802224595078,"flip":753.3165624836404,"spot":754.9500122070312,"n_expiries":10,"n_contracts":2254},"2026-07-11":{"net_gex":5.064487648127957e-05,"flip":null,"spot":754.9500122070312,"n_expiries":10,"n_contracts":1}},"QQQ":{"2026-07-09":{"net_gex":2.2613432975346384,"flip":723.4443390608225,"spot":723.280029296875,"n_expiries":10,"n_contracts":2088},"2026-07-10":{"net_gex":2.9899246541419946,"flip":724.997384244601,"spot":725.510009765625,"n_expiries":10,"n_contracts":1867},"2026-07-11":{"net_gex":5.7642612655934755,"flip":725.0020153442389,"spot":725.510009765625,"n_expiries":10,"n_contracts":1375}}}</script>
+<script id="hgex-state" type="application/json">{"SPY":{"2026-07-09":{"net_gex":10.085199750746488,"flip":751.1428224880423,"spot":751.7100219726562,"n_expiries":10,"n_contracts":2010},"2026-07-10":{"net_gex":22.3802224595078,"flip":753.3165624836404,"spot":754.9500122070312,"n_expiries":10,"n_contracts":2254},"2026-07-11":{"net_gex":4.1018287862387375,"flip":758.553015746883,"spot":754.9500122070312,"n_expiries":10,"n_contracts":2159}},"QQQ":{"2026-07-09":{"net_gex":2.2613432975346384,"flip":723.4443390608225,"spot":723.280029296875,"n_expiries":10,"n_contracts":2088},"2026-07-10":{"net_gex":2.9899246541419946,"flip":724.997384244601,"spot":725.510009765625,"n_expiries":10,"n_contracts":1867},"2026-07-11":{"net_gex":0.05143824382122951,"flip":777.1774933855843,"spot":725.510009765625,"n_expiries":10,"n_contracts":2242}}}</script>
 <div class="gex-section">
 <div class="gex-heading">GEX Monitor <span>做市商伽马监控 (Dealer Gamma)</span></div>
 <div class="gex-cards">
@@ -414,7 +415,7 @@ if(gexEl&&gexD.length>=2){
     line:{color:"#6366f1",width:2},marker:{color:gexColors,size:5},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"}],
     Object.assign({},T,{shapes:[gexZero],yaxis:Object.assign({},T.yaxis,{title:{text:"$M",font:{size:9}}}),xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);
 }
-var hgS=[],hgV=[],hgSpot=754.9500122070312,hgFlip=null;
+var hgS=[680.0, 681.0, 682.0, 683.0, 684.0, 685.0, 686.0, 687.0, 688.0, 689.0, 690.0, 691.0, 692.0, 693.0, 694.0, 695.0, 696.0, 697.0, 698.0, 699.0, 700.0, 701.0, 702.0, 703.0, 704.0, 705.0, 706.0, 707.0, 708.0, 709.0, 710.0, 711.0, 712.0, 713.0, 714.0, 715.0, 716.0, 717.0, 718.0, 719.0, 720.0, 721.0, 722.0, 723.0, 724.0, 725.0, 726.0, 727.0, 728.0, 729.0, 730.0, 731.0, 732.0, 733.0, 734.0, 735.0, 736.0, 737.0, 738.0, 739.0, 740.0, 741.0, 742.0, 743.0, 744.0, 745.0, 746.0, 747.0, 748.0, 749.0, 750.0, 751.0, 752.0, 753.0, 754.0, 755.0, 756.0, 757.0, 758.0, 759.0, 760.0, 761.0, 762.0, 763.0, 764.0, 765.0, 766.0, 767.0, 768.0, 769.0, 770.0, 771.0, 772.0, 773.0, 774.0, 775.0, 776.0, 777.0, 778.0, 779.0, 780.0, 781.0, 782.0, 783.0, 784.0, 785.0, 786.0, 787.0, 788.0, 789.0, 790.0, 791.0, 792.0, 793.0, 794.0, 795.0, 796.0, 797.0, 798.0, 799.0, 800.0, 805.0, 810.0, 815.0, 820.0, 825.0, 830.0],hgV=[-0.0116, -0.0151, -0.0141, -0.0004, -0.0003, -0.0094, -0.0011, -0.002, -0.002, -0.0008, -0.0187, -0.0019, -0.0033, -0.0009, -0.0037, -0.0187, -0.0083, -0.0041, -0.0081, -0.0022, -0.0523, -0.0017, -0.0207, -0.0227, -0.0203, -0.0529, -0.0246, -0.026, -0.0225, -0.0162, -0.1124, -0.0045, -0.0109, -0.0051, -0.0406, -0.0488, -0.0256, -0.0079, -0.0242, -0.0121, -0.1063, -0.008, -0.0191, -0.02, -0.0327, -0.2216, -0.0118, -0.0327, -0.1236, -0.0445, -0.1597, -0.0357, -0.0701, -0.0443, -0.0133, -0.3555, -0.0324, -0.0464, -0.072, -0.0535, -0.4362, -0.0227, -0.0811, -0.2232, -0.0007, -0.2261, -0.0856, 0.03, -0.4941, -0.0382, -0.3831, 0.0429, 0.1372, 0.1561, 0.2943, 0.7126, 0.3371, 1.5744, 0.7183, 0.4842, 1.4451, 0.2043, 0.1921, 0.2662, 0.1149, 0.3466, 0.1201, 0.0517, 0.0584, 0.2181, 0.2244, 0.0379, 0.0221, 0.024, 0.0278, 0.1525, 0.0216, 0.0243, 0.0213, 0.0129, 0.0771, 0.0126, 0.012, 0.0113, 0.0137, 0.0395, 0.0111, 0.0036, 0.0061, 0.0058, 0.0225, 0.0046, 0.0034, 0.0031, 0.0051, 0.009, 0.0014, 0.001, 0.0038, 0.0089, 0.0204, 0.0055, 0.0034, 0.0024, 0.0023, 0.0033, 0.0012],hgSpot=754.9500122070312,hgFlip=758.553015746883;
 var hgEl=document.getElementById("chart-hgex-spy");
 if(hgEl&&hgS.length){
   var hgColors=hgV.map(function(v){return v>=0?"#10b981":"#ef4444";});
