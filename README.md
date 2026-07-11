@@ -1,8 +1,8 @@
-# De-Lever Signal Dashboard
+# Market Fragility Dashboard
 
 Auto-updating dashboard tracking 5 bottom-confirmation signals from the Chinese analyst's de-leveraging framework.
 
-**Live dashboard:** [https://Vincizh.github.io/delever-dashboard](https://Vincizh.github.io/delever-dashboard) *(or your Netlify URL once connected)*
+**Live dashboard:** [https://vincizh.github.io/market-fragility-dashboard/](https://vincizh.github.io/market-fragility-dashboard/) *(or your Netlify URL once connected)*
 
 ## Signals Tracked
 

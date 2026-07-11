@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""De-Lever Signal Dashboard Generator.
+"""Market Fragility Dashboard Generator.
 
 Phase 3 adds a stateless, recompute-from-scratch analytics layer:
   * Part 0 : Net Liquidity = WALCL - TGA - RRP (FRED RRPONTSYD).
@@ -1697,7 +1697,7 @@ parts.append('<!DOCTYPE html>')
 parts.append('<html lang="en"><head>')
 parts.append('<meta charset="UTF-8">')
 parts.append('<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">')
-parts.append('<title>De-Lever Signal Dashboard</title>')
+parts.append('<title>Market Fragility Dashboard</title>')
 parts.append('<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>')
 parts.append('<style>')
 parts.append('*{box-sizing:border-box;margin:0;padding:0}')
@@ -1872,7 +1872,7 @@ parts.append('</style></head><body>')
 
 # header
 parts.append('<div class="header"><div class="header-left">')
-parts.append('<h1>De-Lever Signal Dashboard <span>/ NDX</span></h1>')
+parts.append('<h1>Market Fragility Dashboard <span>/ NDX</span></h1>')
 parts.append('<p>3-layer risk stack: fragility · crowding · amplifiers &middot; auto-updated every hour</p></div>')
 parts.append('<div class="header-right"><div class="timestamp">Last updated: ' + now_str + '</div></div></div>')
 
