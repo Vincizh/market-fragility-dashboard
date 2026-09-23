@@ -24,6 +24,8 @@ CBOE_VIX3M_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX3M_
 CBOE_VIX9D_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX9D_History.csv"
 NYFED_SOFR_URL = "https://markets.newyorkfed.org/api/rates/secured/sofr/last/800.json"
 NYFED_REPO_URL = "https://markets.newyorkfed.org/api/rp/repo/all/results/last/500.json"
+# Overnight reverse repo results (RRPONTSYD equivalent, published the same day).
+NYFED_RRP_URL = "https://markets.newyorkfed.org/api/rp/reverserepo/all/results/last/500.json"
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}&observation_start={start}"
 # Federal Reserve Data Download Program, PRATES release (IOER / IORR / IORB).
 # Used as the primary IORB source because fredgraph.csv is frequently
@@ -38,6 +40,7 @@ FRB_POLICY_RATES_URL = (
 # for reserve balances and the U.S. Treasury General Account, so one fetch supplies
 # the live tail for WRESBAL and WTREGEN when fredgraph.csv times out from CI.
 H41_CURRENT_URL = "https://www.federalreserve.gov/releases/h41/current/h41.htm"
+H41_ARCHIVE_URL = "https://www.federalreserve.gov/releases/h41/{stamp}/"
 # Daily Treasury Statement: operating cash balance, closing TGA balance.
 DTS_OPERATING_CASH_URL = (
     "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/dts/operating_cash_balance"
@@ -140,7 +143,7 @@ def fetch_fred_series(series: str, start: str = "2018-01-01", *, session=None) -
     """
     cache = FRED_CACHE_DIR / f"{series}.csv"
     try:
-        response = _get(FRED_URL.format(series=series, start=start), timeout=10, retries=1, session=session)
+        response = _get(FRED_URL.format(series=series, start=start), timeout=20, retries=1, session=session)
         series_data = _parse_fred_csv(response.text, series)
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(response.text, encoding="utf-8")
@@ -532,8 +535,23 @@ def ai_breadth_and_rs(price_df: pd.DataFrame, now: datetime | None = None) -> di
     if not available:
         return {"available": False}
     latest = close.index.max()
-    above50 = sum(close[t].iloc[-1] > close[t].rolling(50).mean().iloc[-1] for t in available)
-    above200 = sum(close[t].iloc[-1] > close[t].rolling(200).mean().iloc[-1] for t in available)
+    # Each member counts only if it has a close and a moving average on the
+    # latest date; a missing print is excluded from the denominator instead of
+    # silently counting as "below its average".
+    def _share(window: int) -> tuple[int, int]:
+        hits = valid = 0
+        for t in available:
+            last = close[t].iloc[-1]
+            ma = close[t].rolling(window).mean().iloc[-1]
+            if pd.isna(last) or pd.isna(ma):
+                continue
+            valid += 1
+            hits += int(last > ma)
+        return hits, valid
+    above50, valid50 = _share(50)
+    above200, valid200 = _share(200)
+    if not valid50 or not valid200:
+        return {"available": False}
     rs: dict[str, Any] = {}
     for etf in ("SMH", "SOXX"):
         if etf not in close or "SPY" not in close:
@@ -548,7 +566,8 @@ def ai_breadth_and_rs(price_df: pd.DataFrame, now: datetime | None = None) -> di
                    "history": [round(float(x), 6) for x in ratio.tail(252).values]}
     f = freshness(latest, "daily business day", 4, now)
     return {"available": True, "constituents_available": available, "constituent_count": len(available),
-            "above50": above50 / len(available) * 100, "above200": above200 / len(available) * 100,
+            "above50": above50 / valid50 * 100, "above200": above200 / valid200 * 100,
+            "valid50": valid50, "valid200": valid200,
             "rs": rs, "observation_date": latest.strftime("%Y-%m-%d"), "freshness": f.__dict__}
 
 
@@ -602,6 +621,7 @@ TGA_ELEVATED_LEVEL_T = 1.00
 TGA_TRIGGER_4W_B = 50.0
 TGA_ELEVATED_4W_B = 100.0
 
+H41_CACHE_COLUMNS = ("reserves_millions", "tga_millions", "total_assets_millions")
 H41_LABELS = {
     "reserves": "reserve balances with federal reserve banks",
     "tga": "u.s. treasury, general account",
@@ -677,17 +697,40 @@ def parse_h41_release(html: str) -> dict[str, Any]:
             break
         if key + "_millions" not in out:
             raise ValueError("H.4.1 release has no parseable '" + label + "' row")
+    total_assets = _h41_total_assets(rows)
+    if total_assets is not None:
+        out["total_assets_millions"] = total_assets
     return out
+
+
+def _h41_total_assets(rows: list[str]) -> float | None:
+    """Wednesday level of consolidated total assets (FRED WALCL), $ millions.
+
+    The first "Total assets" row belongs to the consolidated statement of
+    condition (Table 5). Its leading "(0)" note cell and the signed change
+    columns are skipped, so the first unsigned number is the Wednesday level.
+    Optional: older fixtures without the table simply return ``None``.
+    """
+    import re as _re
+    for row in rows:
+        cells = [_strip_tags(c) for c in _re.findall(
+            r"<t[dh]\b[^>]*>(.*?)</t[dh]>", row, flags=_re.I | _re.S)]
+        if not cells or cells[0].strip().lower() != "total assets":
+            continue
+        numbers = [v for v in (_h41_number(c) for c in cells[1:]) if v is not None]
+        if numbers:
+            return numbers[0]
+    return None
 
 
 def load_h41_cache() -> pd.DataFrame:
     """Committed history of parsed H.4.1 weekly observations (may be empty)."""
     cache = FRED_CACHE_DIR / "H41_WEEKLY.csv"
     if not cache.exists():
-        return pd.DataFrame(columns=["reserves_millions", "tga_millions"])
+        return pd.DataFrame(columns=list(H41_CACHE_COLUMNS))
     df = pd.read_csv(cache)
     if "week_ended" not in df.columns:
-        return pd.DataFrame(columns=["reserves_millions", "tga_millions"])
+        return pd.DataFrame(columns=list(H41_CACHE_COLUMNS))
     df["week_ended"] = pd.to_datetime(df["week_ended"], errors="coerce")
     df = df.dropna(subset=["week_ended"]).drop_duplicates("week_ended", keep="last")
     return df.set_index("week_ended").sort_index()
@@ -698,7 +741,7 @@ def update_h41_cache(record: dict[str, Any]) -> pd.DataFrame:
     cache = FRED_CACHE_DIR / "H41_WEEKLY.csv"
     df = load_h41_cache()
     day = pd.Timestamp(record["week_ended"])
-    for column in ("reserves_millions", "tga_millions"):
+    for column in H41_CACHE_COLUMNS:
         if record.get(column) is not None:
             df.loc[day, column] = float(record[column])
     df = df.sort_index()
@@ -976,6 +1019,17 @@ def funding_resonance(legs: Iterable[dict[str, Any]]) -> dict[str, Any]:
     if count == 1:
         interpretation = ("Only " + active[0]["label"].lower() + " (" + active[0]["name"].upper()
                           + ") is active. " + RESONANCE_STATES[1][3])
+    if ordered and len(missing) == len(ordered):
+        # Nothing could be evaluated: this must not read as "no resonance".
+        return {
+            "state": "unknown", "headline": "Data unavailable", "headline_cn": "数据不可用",
+            "active_count": 0, "total": len(ordered),
+            "summary": "0/{} legs evaluable".format(len(ordered)),
+            "interpretation": "All three legs are unavailable or stale; the funding state cannot be assessed.",
+            "incomplete": True, "active_legs": [],
+            "unavailable_legs": [leg["name"] for leg in missing],
+            "legs": {leg["name"]: leg for leg in ordered},
+        }
     detail = interpretation
     if missing:
         names = ", ".join(leg["name"].upper() for leg in missing)
@@ -1000,6 +1054,183 @@ def fetch_treasury_settlements(*, session=None) -> set[date]:
     }
     response = _get(TREASURY_AUCTIONS_URL, params=params, timeout=50, session=session)
     return parse_treasury_large_settlements(response.json().get("data", []))
+
+
+# ---------------------------------------------------------------------------
+# LPI official-source splicing and presentation logic (pure, unit-tested).
+# ---------------------------------------------------------------------------
+LPI_MAX_AGE_DAYS = 12   # H.4.1 is published Thursday for the Wednesday week
+
+
+def parse_reverse_repo(payload: dict[str, Any]) -> pd.Series:
+    """Daily overnight RRP take-up in $ billions (RRPONTSYD definition)."""
+    rows = payload.get("repo", {}).get("operations", [])
+    values: dict[pd.Timestamp, float] = {}
+    for row in rows:
+        if str(row.get("operationType", "")).lower() != "reverse repo":
+            continue
+        if str(row.get("term", "Overnight")).lower() != "overnight":
+            continue
+        d = pd.to_datetime(row.get("operationDate"), errors="coerce")
+        try:
+            accepted = float(row.get("totalAmtAccepted"))
+        except (TypeError, ValueError):
+            continue
+        if pd.isna(d):
+            continue
+        values[d.normalize()] = values.get(d.normalize(), 0.0) + accepted / 1e9
+    out = pd.Series(values, dtype=float).sort_index()
+    out.attrs["source"] = "NY Fed reverse repo results"
+    return out
+
+
+def h41_column(frame: pd.DataFrame, column: str) -> pd.Series:
+    if frame is None or column not in frame:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce").dropna()
+
+
+def backfill_h41_archive(release_dates: Iterable[date], *, session=None) -> pd.DataFrame:
+    """Parse archived H.4.1 releases (published Thursdays) into the cache."""
+    frame = load_h41_cache()
+    for day in release_dates:
+        url = H41_ARCHIVE_URL.format(stamp=day.strftime("%Y%m%d"))
+        try:
+            frame = update_h41_cache(parse_h41_release(_get(url, timeout=25, retries=2, session=session).text))
+        except Exception as exc:  # a holiday shift simply has no page
+            print("H.4.1 archive", day, "skipped:", exc)
+    return frame
+
+
+def lpi_source_series(*, session=None) -> dict[str, Any]:
+    """Current-tail official inputs for the LPI factors.
+
+    FRED keeps the long history; the NY Fed (SOFR, ON RRP) and the Fed's own
+    H.4.1 release (total assets, TGA) supply the recent tail, because
+    fredgraph.csv times out from CI and a FRED-only path froze the index.
+    Each returned series carries ``attrs["source"]`` naming its tail source.
+    """
+    http = session or requests.Session()
+    out: dict[str, Any] = {"errors": {}}
+
+    def _fred(series, start="2003-01-01"):
+        try:
+            return fetch_fred_series(series, start, session=http)
+        except Exception as exc:
+            out["errors"]["fred_" + series] = str(exc)
+            return None
+
+    try:
+        nyfed = parse_sofr_api(_get(NYFED_SOFR_URL, session=http, timeout=25, retries=2).json())["median"]
+    except Exception as exc:
+        nyfed = None
+        out["errors"]["sofr_nyfed"] = str(exc)
+    fred_sofr = _fred("SOFR")
+    out["sofr"] = splice_official(fred_sofr, nyfed)
+    out["sofr"].attrs["source"] = "FRED SOFR + NY Fed" if nyfed is not None else "FRED SOFR"
+
+    try:
+        fetch_h41_weekly(session=http)          # refreshes the committed cache
+    except Exception as exc:
+        out["errors"]["h41"] = str(exc)
+    h41 = load_h41_cache()
+    for key, fred_id, column in (("walcl", "WALCL", "total_assets_millions"),
+                                 ("tga", "WTREGEN", "tga_millions")):
+        tail = h41_column(h41, column)
+        out[key] = splice_official(_fred(fred_id), tail)
+        out[key].attrs["source"] = ("FRED " + fred_id + " + Fed H.4.1") if not tail.empty else ("FRED " + fred_id)
+
+    try:
+        rrp_tail = parse_reverse_repo(_get(NYFED_RRP_URL, session=http, timeout=25, retries=2).json())
+    except Exception as exc:
+        rrp_tail = None
+        out["errors"]["rrp_nyfed"] = str(exc)
+    out["rrp"] = splice_official(_fred("RRPONTSYD"), rrp_tail)
+    out["rrp"].attrs["source"] = "FRED RRPONTSYD + NY Fed" if rrp_tail is not None else "FRED RRPONTSYD"
+    return out
+
+
+def lpi_common_cutoff(pct: dict[str, pd.Series]) -> pd.Timestamp | None:
+    """Latest week on which every available factor has a percentile."""
+    lasts = []
+    for series in pct.values():
+        clean = series.dropna()
+        if clean.empty:
+            continue
+        lasts.append(clean.index.max())
+    return min(lasts) if lasts else None
+
+
+def lpi_freshness(asof: Any, now: datetime | None = None,
+                  max_age_days: int = LPI_MAX_AGE_DAYS) -> dict[str, Any]:
+    current = (now or utc_now())
+    if asof is None or (isinstance(asof, float) and asof != asof):
+        return {"asof": None, "age_days": None, "stale": True}
+    day = pd.Timestamp(asof).date()
+    age = (current.date() - day).days
+    return {"asof": day.isoformat(), "age_days": age, "stale": age > max_age_days}
+
+
+def vix_state(available: bool, contango: bool) -> str:
+    """Three-state term structure: missing data is never 'backwardation'."""
+    if not available:
+        return "unavailable"
+    return "contango" if contango else "backwardation"
+
+
+def delever_tally(signals: dict[str, bool | None]) -> dict[str, Any]:
+    """Count confirmations over evaluable signals only (None = unavailable)."""
+    evaluable = {k: bool(v) for k, v in signals.items() if v is not None}
+    confirmed = sum(evaluable.values())
+    missing = [k for k, v in signals.items() if v is None]
+    return {"confirmed": confirmed, "evaluable": len(evaluable), "total": len(signals),
+            "unavailable": missing,
+            "text": "{}/{}".format(confirmed, len(evaluable)) + (
+                " ({} unavailable)".format(len(missing)) if missing else "")}
+
+
+LPI_BAND_TABLE = (
+    (40.0, "#10b981", "green", "Low: cushion thick 缓冲充足"),
+    (60.0, "#f59e0b", "yellow", "Neutral: watch for inflection 中性"),
+    (80.0, "#f97316", "orange", "Elevated: reduce leverage, widen hedges 偏高"),
+    (float("inf"), "#ef4444", "red", "Extreme: defensive sizing 极端"),
+)
+
+
+def lpi_band_info(value: float) -> tuple[str, str, str]:
+    if value != value:
+        return "#64748b", "gray", "Insufficient data"
+    for upper, col, cls, label in LPI_BAND_TABLE:
+        if value < upper:
+            return col, cls, label
+    return LPI_BAND_TABLE[-1][1:]
+
+
+def lpi_regime(value: float, d13: float) -> tuple[str, str, str, str, str]:
+    """(level, direction, message, color, class). Level stays High/Low at 60
+    for the regime clock; the message follows the same band table as the gauge."""
+    level = "High" if value >= 60 else "Low"
+    if d13 != d13:
+        direction = "Flat"
+    elif d13 > 2:
+        direction = "Rising"
+    elif d13 < -2:
+        direction = "Falling"
+    else:
+        direction = "Flat"
+    if value < 40:
+        if direction == "Rising":
+            return level, direction, "Inflection watch: pressure building from a low base", "#f59e0b", "yellow"
+        return level, direction, "Cushion thick and stable", "#10b981", "green"
+    if value < 60:
+        if direction == "Rising":
+            return level, direction, "Neutral and rising: stage hedges", "#f97316", "orange"
+        return level, direction, "Neutral: watch for inflection", "#f59e0b", "yellow"
+    if direction == "Falling":
+        return level, direction, "Decompressing: pressure receding from highs", "#14b8a6", "teal"
+    if direction == "Rising":
+        return level, direction, "Danger zone: cut leverage, add hedges", "#ef4444", "red"
+    return level, direction, "Elevated but stable: keep hedges on", "#f97316", "orange"
 
 
 def fetch_fast_metrics(snapshot_path: str | Path, now: datetime | None = None) -> dict[str, Any]:

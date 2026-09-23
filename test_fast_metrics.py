@@ -452,3 +452,83 @@ class FundingResonanceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class LpiFreshnessAndLabelTests(unittest.TestCase):
+    def test_h41_total_assets_skips_note_and_signed_cells(self):
+        html = H41_HTML.replace("</table>", "<tr><td>Total assets</td><td>(0)</td><td>6,746,548</td>"
+                                "<td>+ 5,929</td><td>- 12,000</td></tr></table>")
+        out = fm.parse_h41_release(html)
+        self.assertAlmostEqual(out["total_assets_millions"], 6746548.0)
+        self.assertNotIn("total_assets_millions", fm.parse_h41_release(H41_HTML))
+
+    def test_reverse_repo_keeps_overnight_rrp_in_billions(self):
+        payload = {"repo": {"operations": [
+            {"operationDate": "2026-09-21", "operationType": "Reverse Repo", "term": "Overnight",
+             "totalAmtAccepted": 12_345_000_000},
+            {"operationDate": "2026-09-21", "operationType": "Repo", "term": "Overnight",
+             "totalAmtAccepted": 1_000_000_000},
+            {"operationDate": "2026-09-22", "operationType": "Reverse Repo", "term": "Overnight",
+             "totalAmtAccepted": None},
+        ]}}
+        s = fm.parse_reverse_repo(payload)
+        self.assertEqual(list(s.index), [pd.Timestamp("2026-09-21")])
+        self.assertAlmostEqual(s.iloc[0], 12.345)
+
+    def test_common_cutoff_is_earliest_last_observation(self):
+        idx = pd.date_range("2026-07-01", periods=6, freq="7D")
+        a = pd.Series(range(6), index=idx, dtype=float)
+        b = a.copy(); b.iloc[-2:] = float("nan")
+        self.assertEqual(fm.lpi_common_cutoff({"a": a, "b": b}), idx[3])
+        self.assertIsNone(fm.lpi_common_cutoff({}))
+
+    def test_freshness_gate(self):
+        now = datetime(2026, 9, 23, tzinfo=timezone.utc)
+        self.assertFalse(fm.lpi_freshness(pd.Timestamp("2026-09-16"), now)["stale"])
+        stale = fm.lpi_freshness(pd.Timestamp("2026-08-12"), now)
+        self.assertTrue(stale["stale"]); self.assertEqual(stale["age_days"], 42)
+        self.assertTrue(fm.lpi_freshness(None, now)["stale"])
+
+    def test_vix_state_never_reports_backwardation_when_unavailable(self):
+        self.assertEqual(fm.vix_state(False, False), "unavailable")
+        self.assertEqual(fm.vix_state(True, False), "backwardation")
+        self.assertEqual(fm.vix_state(True, True), "contango")
+
+    def test_delever_tally_counts_only_evaluable_signals(self):
+        t = fm.delever_tally({"a": True, "b": False, "c": None, "d": True})
+        self.assertEqual((t["confirmed"], t["evaluable"], t["total"]), (2, 3, 4))
+        self.assertEqual(t["unavailable"], ["c"])
+        self.assertEqual(t["text"], "2/3 (1 unavailable)")
+
+    def test_band_and_regime_wording_is_consistent(self):
+        self.assertIn("Low", fm.lpi_band_info(30)[2])
+        self.assertIn("Neutral", fm.lpi_band_info(55)[2])
+        self.assertIn("Elevated", fm.lpi_band_info(70)[2])
+        self.assertIn("Extreme", fm.lpi_band_info(90)[2])
+        self.assertEqual(fm.lpi_band_info(float("nan"))[1], "gray")
+        for v, d in ((30, -1), (45, -1), (55, 3), (70, 3), (90, -3)):
+            msg = fm.lpi_regime(v, d)[2]
+            self.assertNotIn("Full risk budget", msg)
+            self.assertNotIn("5x", msg)
+        self.assertEqual(fm.lpi_regime(55, 3)[0], "Low")
+        self.assertIn("Neutral", fm.lpi_regime(55, 3)[2])
+
+    def test_funding_all_legs_missing_is_unknown_not_normal(self):
+        r = fm.funding_resonance([
+            fm.sofr_leg({"available": False, "freshness": {}}),
+            fm.reserve_leg({"available": False, "freshness": {}}),
+            fm.tga_leg({"available": False, "freshness": {}}),
+        ])
+        self.assertEqual(r["state"], "unknown")
+        self.assertEqual(r["headline"], "Data unavailable")
+
+    def test_ai_breadth_excludes_members_without_latest_close(self):
+        idx = pd.bdate_range("2025-01-01", periods=260)
+        cols = {t: [100.0 + i for i in range(260)] for t in fm.AI_BASKET}
+        cols["SPY"] = [100.0] * 260
+        df = pd.DataFrame(cols, index=idx)
+        first = fm.AI_BASKET[0]
+        df.loc[idx[-1], first] = float("nan")
+        out = fm.ai_breadth_and_rs(df)
+        self.assertTrue(out["available"])
+        self.assertEqual(out["valid50"], len(fm.AI_BASKET) - 1)

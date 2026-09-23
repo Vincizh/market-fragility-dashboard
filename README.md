@@ -69,6 +69,20 @@ Both series are read first from the [Federal Reserve H.4.1 release](https://www.
 
 Reserves/GDP with its rolling 156-week percentile remains a **separate** normalized structural metric; the strategy overlay's dollar levels do not replace it.
 
+### LPI: spliced official sources, one common as-of week, freshness gate
+
+FRED can time out from GitHub Actions, which previously froze every LPI factor on the last cached week. Each LPI input now splices a second official source after FRED's last observation: SOFR from the [NY Fed reference-rate API](https://markets.newyorkfed.org/), WALCL (Wednesday total assets) and WTREGEN (weekly-average TGA) from the [Federal Reserve H.4.1 release archive](https://www.federalreserve.gov/releases/h41/), and overnight RRP take-up from the [NY Fed reverse-repo results API](https://markets.newyorkfed.org/api/rp/reverserepo/all/results/last/500.json). The pre-2018 short-rate history uses DFF, now committed to `data/fred-cache/DFF.csv` so CI and local runs use the same history.
+
+* Net-liquidity inputs are carried forward only across a single interior gap (holiday shift), never past a series' last print.
+* Treasury auctions dated after today are excluded from the 4-week duration-supply sum.
+* The headline, factor cards, sparklines and decomposition all read the same week: the latest week on which every available factor has an observation. The gauge shows that common as-of date plus each factor's own last observation and source.
+* If the common week is more than 12 days old, the LPI is shown gray as a last-known value and no regime action language or sizing stance is issued.
+* LPI bands: below 40 low, 40-60 neutral, 60-80 elevated, 80+ extreme. The regime level still splits High/Low at 60.
+
+### De-lever conditions are counted over evaluable signals only
+
+The amplifier count is `confirmed / evaluable`. A signal whose source failed (VIX curve stale or date-mismatched, a crypto funding rate missing, COT unavailable) is marked unavailable and removed from the denominator instead of counting as a failed condition. BTC and ETH funding are two separate votes. Dealer gamma is context and is not part of the count.
+
 ### Freshness and fallback
 
 Every Phase A/B card shows both the **observation date** and the **pipeline fetch time**, plus its expected cadence. Daily business-day data becomes stale after four calendar days and weekly reserve data after ten; stale data is gray. FRED requests use retry plus a versioned archive of official FRED CSV responses as a graceful fallback. The displayed observation date, not the page refresh time, governs freshness.

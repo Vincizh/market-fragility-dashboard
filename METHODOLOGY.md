@@ -43,6 +43,17 @@ All Phase A/B metrics use a visible observation date, fetch time, cadence, and s
 * **AI CapEx cycle:** deliberately out of scope for this fast-variable implementation; slow quarterly data is not added as a fourth layer or folded into fast confirmation.
 * **Forward P/E, issuer CDS, detailed DRAM/NAND contract prices and management guidance:** require paid or manual processes and are not represented as automatic current data.
 
+## LPI data lineage and freshness
+
+| Factor | Primary | Splice after the primary's last observation | Notes |
+|---|---|---|---|
+| Short rate | FRED SOFR (DFF before 2018) | NY Fed SOFR median | Weekly W-WED last value |
+| Net liquidity | FRED WALCL − WTREGEN − RRPONTSYD | H.4.1 total assets and weekly-average TGA; NY Fed overnight RRP | One interior gap may be carried; no carry past the last print |
+| Duration supply | Treasury auctions query | none | Auctions dated after today are excluded |
+| Vol amplifier | Yahoo ^VIX | none | Weekly close |
+
+The composite is read on the common as-of week (minimum of each factor's last valid week). A common week older than 12 days is labelled stale; the page then shows the last-known value in gray and suppresses action language. Conditional tail statistics use the full weekly S&P 500 path for forward outcomes, and the columns report the frequency of a maximum drawdown larger than 5% or 10% within the horizon. COT chart percentiles are expanding (each week ranked only against data available that week); the z-score uses a trailing 156-week window.
+
 ## Freshness
 
 A daily business-day series is gray after four calendar days; the weekly reserves series is gray after ten calendar days. Every new card reports both the underlying observation date and the pipeline fetch time. FRED live reads retry, then use a committed cache of official FRED CSV responses only when necessary; freshness remains based on the observation date.

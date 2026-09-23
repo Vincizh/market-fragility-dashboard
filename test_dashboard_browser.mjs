@@ -176,8 +176,13 @@ try {
         sofrPanel.annotations.some((a) => /\+3bp/.test(a)), sofrPanel.annotations.join(' / '));
       if (sofrPanel.lastDate) {
         const ageDays = Math.floor((Date.now() - Date.parse(sofrPanel.lastDate + 'T00:00:00Z')) / 86400000);
-        check(`${tag} latest SOFR observation within ${MAX_STALE_DAYS} days`, ageDays <= MAX_STALE_DAYS,
-          `${sofrPanel.lastDate} (${ageDays}d old)`);
+        // A source outage is acceptable only when the page says so: an old
+        // observation must be labelled stale / last official observation.
+        const staleLabelled = ageDays > MAX_STALE_DAYS && await page.evaluate(() =>
+          /stale|last official observation/i.test((document.getElementById('funding-pressure') || {}).innerText || ''));
+        check(`${tag} latest SOFR observation within ${MAX_STALE_DAYS} days or labelled stale`,
+          ageDays <= MAX_STALE_DAYS || staleLabelled,
+          `${sofrPanel.lastDate} (${ageDays}d old${staleLabelled ? ', labelled stale' : ''})`);
       } else {
         check(`${tag} latest SOFR observation available`, false, 'no series data');
       }
