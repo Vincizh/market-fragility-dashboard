@@ -301,6 +301,14 @@ try {
     } else {
       check(`${tag} all sections open by default`, defaults.open.length === 9, String(defaults.open.length));
     }
+    const calInfo = await page.evaluate(() => ({
+      rows: document.querySelectorAll('[data-testid="cal-list"] li').length,
+      text: document.getElementById('sec-calendar').textContent,
+      drawn: !!document.getElementById('chart-stress-cal').querySelector('.main-svg'),
+    }));
+    check(`${tag} rolling calendar lists events with status labels`, calInfo.rows >= 6 && /announced|scheduled|estimated/.test(calInfo.text), String(calInfo.rows));
+    check(`${tag} calendar has no hard-coded 2026 H2 percentiles`, !/H2|79th|2nd highest/.test(calInfo.text));
+    check(`${tag} calendar chart drawn`, calInfo.drawn);
     // navigation: clicking a nav link opens and scrolls to the section
     await page.evaluate(() => document.querySelectorAll('details.sec').forEach((d) => { d.open = false; }));
     await page.click('.sec-nav a[data-target="sec-rates"]');

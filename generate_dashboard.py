@@ -34,7 +34,9 @@ import fred_catalog
 import fred_modules
 import fred_monitor
 import fred_render
+import html as _html
 import layout_render
+import stress_calendar
 import dash_state
 import health
 
@@ -1035,18 +1037,24 @@ for d, v in top10[:3]:
             break
     stress_top3.append({"d": d, "v": v, "tag": tag})
 
-# --- Item 6: projected 2026-H2 stress calendar timeline ---------------------
+# --- Rolling 120-day liquidity calendar -------------------------------------
 today_iso = datetime.now(timezone.utc).date().isoformat()
-stress_cal = [
-    {"d": "2026-07-15", "sev": "low",  "color": "#10b981", "size": 11,
-     "label": "Jul — lowest H2 pressure"},
-    {"d": "2026-08-15", "sev": "mod",  "color": "#f59e0b", "size": 15,
-     "label": "Aug — refunding settlement peak"},
-    {"d": "2026-09-16", "sev": "high", "color": "#ef4444", "size": 22,
-     "label": "Sep — FOMC + corp tax + TGA refill (4 drains)"},
-    {"d": "2026-11-04", "sev": "elev", "color": "#f97316", "size": 18,
-     "label": "Nov — quarterly refunding + FOMC"},
-]
+_cal_today = datetime.now(timezone.utc).date()
+_cal_upcoming = None
+_cal_auction_err = None
+try:
+    _cal_upcoming = stress_calendar.fetch_upcoming(_cal_today)
+except Exception as _exc:  # noqa: BLE001
+    _cal_auction_err = str(_exc)[:120]
+    print("Upcoming auctions fetch failed:", _cal_auction_err)
+cal_events = stress_calendar.build_events(_cal_today, _cal_upcoming)
+cal_weeks = stress_calendar.weekly_load(cal_events, _cal_today)
+stress_cal = stress_calendar.chart_payload(cal_weeks)
+if not stress_calendar.fomc_covers(_cal_today):
+    print("WARNING: FOMC list ends before the 120-day calendar window; extend stress_calendar.FOMC_DECISION_DAYS")
+health.register("Treasury upcoming auctions", "FiscalData upcoming_auctions",
+                _cal_today.isoformat() if (_cal_upcoming is not None and len(_cal_upcoming)) else None, "weekly announcements",
+                "current" if (_cal_upcoming is not None and len(_cal_upcoming)) else "failed")
 
 # --- Prior page (read for the embedded SPY/QQQ GEX snapshot history) --------
 try:
@@ -2686,18 +2694,28 @@ parts.append('<div id="chart-lpi-full"></div></div>')
 parts.append('</div>')
 
 _blk("calendar")
-# stress calendar — timeline + text legend
+# rolling calendar — weekly event load + list
 parts.append('<div class="chart-card" style="margin:0 0 10px">'
-             + '<div class="chart-title">2026 H2 Stress Calendar &middot; 压力日历</div>'
-             + '<div class="chart-subtitle">severity-sized markers &middot; today cursor</div>'
+             + '<div class="chart-title">Liquidity calendar &middot; next 120 days &middot; 压力日历</div>'
+             + '<div class="chart-subtitle">weekly event count (quarter-end and refunding settlement count twice) &middot; hover for events</div>'
              + '<div id="chart-stress-cal"></div></div>')
-parts.append('<div class="lpi-cal">')
-parts.append('<b>2026 H2 压力日历 (projected stress calendar)</b><br>')
-parts.append('<span class="hot">Sep (~79th pct):</span> FOMC Sep 15-16 &middot; corp estimated tax Sep 15 &middot; quarter-end TGA refill Sep 30 &mdash; 4 simultaneous drains<br>')
-parts.append('<span class="hot">Nov (2nd highest):</span> quarterly refunding issuance + FOMC late Oct<br>')
-parts.append('<span class="hot">Aug (3rd):</span> refunding settlement peak mid-August<br>')
-parts.append('<span class="cool">Jul:</span> lowest pressure month of H2')
-parts.append('</div>')
+_STATUS_TXT = {"announced": "announced", "scheduled": "scheduled", "estimated": "estimated"}
+_cal_rows = []
+for _e in cal_events:
+    if _e["date"] < _cal_today:
+        continue
+    _cal_rows.append('<li><span class="d">{}</span><span class="k {}">{}</span><span>{}</span></li>'.format(
+        _e["date"].strftime("%a %b %d"), _e["status"], _STATUS_TXT[_e["status"]], _html.escape(_e["label"])))
+_cal_note = ("Announced events come from the Treasury upcoming-auctions feed; scheduled events follow the "
+             '<a href="' + stress_calendar.FOMC_SOURCE + '" style="color:#818cf8">Fed FOMC calendar</a> and fixed calendar rules; '
+             "estimated events follow the usual quarterly refunding pattern and shift if Treasury announces otherwise. "
+             "Bill settlements (Tuesday and Thursday) are not listed.")
+if _cal_auction_err:
+    _cal_note += " The auction feed was unavailable this run, so coupon settlements are missing."
+if not stress_calendar.fomc_covers(_cal_today):
+    _cal_note += " The built-in FOMC list ends before the end of this window."
+parts.append('<ul class="cal-list" data-testid="cal-list">' + "".join(_cal_rows) + '</ul>')
+parts.append('<div class="mod-note">' + _cal_note + '</div>')
 
 
 _blk("fedbs")
@@ -3134,23 +3152,19 @@ parts.append('     xaxis:{type:"category",gridcolor:"#1e2433",tickfont:{size:12}
 parts.append('     yaxis:Object.assign({},T.yaxis,{title:{text:"probability %",font:{size:12}}})}),CFG);')
 parts.append('  tailIds.push("chart-tail");')
 parts.append('}')
-# Phase 6 — stress calendar timeline (Jul-Dec 2026, today cursor)
+# rolling calendar: weekly load bars with a today cursor
 parts.append('var SC=' + j_stress_cal + ';var today=' + j_today + ';var scIds=[];')
 parts.append('var scEl=document.getElementById("chart-stress-cal");')
 parts.append('if(scEl&&SC.length){')
-parts.append('  var scNarrow=window.innerWidth<640;')
-parts.append('  var scTrace={x:SC.map(function(m){return m.d;}),y:SC.map(function(){return 0;}),type:"scatter",mode:(scNarrow?"markers":"markers+text"),')
-parts.append('    marker:{color:SC.map(function(m){return m.color;}),size:SC.map(function(m){return m.size;}),line:{color:"#0d0f14",width:1}},')
-parts.append('    text:SC.map(function(m){return m.label;}),textposition:"top center",textfont:{size:12,color:"#cbd5e1"},')
-parts.append('    hovertemplate:"%{x}<br>%{text}<extra></extra>"};')
-parts.append('  var scShapes=[{type:"line",xref:"x",x0:today,x1:today,yref:"paper",y0:0,y1:1,line:{color:"#e2e8f0",width:1.5,dash:"dash"}},')
-parts.append('    {type:"line",xref:"paper",x0:0,x1:1,yref:"y",y0:0,y1:0,line:{color:"#334155",width:1}}];')
-parts.append('  var scAnn=[{x:today,y:0.9,yref:"paper",text:"today",showarrow:false,font:{size:12,color:"#e2e8f0"},xanchor:"left"}];')
+parts.append('  var scTrace={x:SC.map(function(m){return m.d;}),y:SC.map(function(m){return m.v;}),type:"bar",')
+parts.append('    marker:{color:SC.map(function(m){return m.c;})},text:SC.map(function(m){return m.v?String(m.v):"";}),textposition:"outside",cliponaxis:false,')
+parts.append('    textfont:{size:12,color:"#cbd5e1"},customdata:SC.map(function(m){return m.t;}),hovertemplate:"Week of %{x|%b %d}<br>%{customdata}<extra></extra>"};')
+parts.append('  var scShapes=[{type:"line",xref:"x",x0:today,x1:today,yref:"paper",y0:0,y1:1,line:{color:"#e2e8f0",width:1.5,dash:"dash"}}];')
+parts.append('  var scAnn=[{x:today,y:1,yref:"paper",text:"today",showarrow:false,font:{size:12,color:"#e2e8f0"},xanchor:"left",yanchor:"bottom"}];')
 parts.append('  Plotly.newPlot("chart-stress-cal",[scTrace],')
-parts.append('    Object.assign({},T,{height:130,margin:{l:10,r:10,t:24,b:24},shapes:scShapes,annotations:scAnn,')
-parts.append('     xaxis:{type:"date",range:["2026-06-25","2026-12-15"],gridcolor:"#1e2433",tickformat:"%b",dtick:"M1",tickfont:{size:12},fixedrange:true},')
-parts.append('     yaxis:{visible:false,range:[-1,1.6],fixedrange:true,type:"linear"}}),CFG);')
-parts.append('  if(scNarrow){var ul=document.createElement("ul");ul.className="sc-list";ul.setAttribute("data-testid","stress-cal-list");SC.forEach(function(m){var li=document.createElement("li");var dot=document.createElement("span");dot.className="sc-dot";dot.style.background=m.color;li.appendChild(dot);li.appendChild(document.createTextNode(m.d+"  "+String(m.label).replace(/<br>/g," ")));ul.appendChild(li);});scEl.parentNode.insertBefore(ul,scEl.nextSibling);}')
+parts.append('    Object.assign({},T,{height:200,margin:{l:30,r:10,t:26,b:30},shapes:scShapes,annotations:scAnn,bargap:0.25,')
+parts.append('     xaxis:{type:"date",gridcolor:"#1e2433",tickformat:"%b %d",tickfont:{size:12},fixedrange:true,nticks:window.innerWidth<640?5:9},')
+parts.append('     yaxis:{gridcolor:"#1e2433",tickfont:{size:12},fixedrange:true,rangemode:"tozero",dtick:1,title:{text:"events",font:{size:12}}}}),CFG);')
 parts.append('  scIds.push("chart-stress-cal");')
 parts.append('}')
 _mfd_charts = {"funding": fred_mod["funding"]["charts"],
