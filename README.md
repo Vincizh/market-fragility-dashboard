@@ -24,7 +24,7 @@ The dashboard is deterministic and refreshes hourly through GitHub Actions. A mi
 | L3 | VIX term structure | Official Cboe VIX9D, VIX and VIX3M closes; curve output requires the same observation date for all three | [Cboe VIX3M history](https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX3M_History.csv) |
 | L3 | Credit transmission | HY, IG and BBB ICE BofA option-adjusted spreads, plus 60-day changes | [FRED HY OAS](https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLH0A0HYM2), [IG](https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLC0A0CM), [BBB](https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLC0A4CBBB) |
 | L3 | AI breadth & relative strength | Fixed 19-security basket above 50d/200d MAs; SMH/SPY and SOXX/SPY ratio trends | Yahoo Finance adjusted daily closes |
-| L3 | Dealer gamma | Homebrew Black–Scholes gamma aggregation from SPY/QQQ option chains; optional FlashAlpha single-stock monitor | Yahoo option chains / FlashAlpha |
+| L3 | Dealer gamma | Homebrew Black–Scholes gamma aggregation from SPY/QQQ option chains | Yahoo option chains |
 | L3 | Funding, CTA and correlation | Crypto funding, NDX COT short-covering proxy, cross-sector correlation | CoinGecko/OKX, CFTC, Yahoo Finance |
 
 ## Critical data-quality rules
@@ -103,8 +103,7 @@ DIX is **not an automated signal or score** in this repository. FINRA ATS or Reg
 
 ```bash
 pip install yfinance requests pandas numpy openpyxl
-python -m unittest -v test_fast_metrics.py test_gex.py
-python test_gex.py
+python -m unittest -v test_fast_metrics
 python generate_dashboard.py
 ```
 

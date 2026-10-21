@@ -28,12 +28,9 @@ jobs:
       - name: Unit tests
         run: |
           python -m unittest test_fast_metrics
-          python test_gex.py
 
       - name: Generate dashboard
         run: python generate_dashboard.py
-        env:
-          FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
 
       # Browser-level gate on the deployment-style static artifact: the three
       # Dollar Funding Pressure cards must show real values, all three aligned

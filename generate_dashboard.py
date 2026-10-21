@@ -1017,10 +1017,7 @@ stress_cal = [
      "label": "Nov — quarterly refunding + FOMC"},
 ]
 
-# --- GEX Monitor (Phase 2b, FlashAlpha free tier) ---------------------------
-print("Running GEX monitor...")
-import gex_monitor
-
+# --- Prior page (read for the embedded SPY/QQQ GEX snapshot history) --------
 try:
     with open("index.html", "r", encoding="utf-8") as _f:
         _prev_html = _f.read()
@@ -1028,29 +1025,6 @@ except Exception:
     _prev_html = ""
 
 gex_now = datetime.now(timezone.utc)
-gex_key = os.environ.get("FLASHALPHA_API_KEY")
-try:
-    gex_state, gex_meta = gex_monitor.run_gex_update(gex_now, _prev_html, gex_key)
-except Exception as e:
-    print("GEX monitor error (non-fatal):", e)
-    gex_state, gex_meta = gex_monitor.default_state(), {
-        "fetched": None, "status": "error", "expiration": "",
-        "fresh": set(), "api_key": bool(gex_key)}
-
-gex_nvda = gex_monitor.nvda_proxy(gex_state)
-gex_section_html = gex_monitor.render_section(gex_state, gex_meta, gex_now)
-gex_hist_d, gex_hist_v = gex_monitor.nvda_history_json(gex_state)
-print("GEX monitor: fetched={} status={} used={}/{} nvda_has={} excluded={}".format(
-    gex_meta.get("fetched"), gex_meta.get("status"),
-    gex_state["daily"]["count"], gex_monitor.GEX_DAILY_LIMIT,
-    gex_nvda["has"], gex_state.get("excluded")))
-
-if gex_nvda["has"]:
-    gex_note = "NVDA net GEX {} ({})".format(
-        gex_monitor.fmt_gex(gex_nvda["net_gex"]),
-        "negative = amplifying" if not gex_nvda["positive"] else "positive = dampening")
-else:
-    gex_note = ""
 
 # ---------------------------------------------------------------------------
 # Homebrew Index GEX (Part A) — SPY + QQQ dealer gamma from yfinance chains
@@ -1266,7 +1240,7 @@ for _sym in HOMEBREW_GEX_SYMBOLS:
         [w[0] for w in _reading.get("walls", [])], _reading["n_expiries"],
         _reading["n_contracts"], n_days, cached))
 
-# Dealer-gamma signal source resolution (Part A4): homebrew SPY -> NVDA -> N/A
+# Dealer-gamma signal source resolution (Part A4): homebrew SPY -> N/A
 spy_res = hgex_results.get("SPY", {})
 qqq_res = hgex_results.get("QQQ", {})
 hgex_spy_has = bool(spy_res.get("ok")) and spy_res.get("net_gex") is not None
@@ -1275,22 +1249,18 @@ if hgex_spy_has:
     dg_has, dg_source = True, "SPY GEX (homebrew)"
     dg_positive = hgex_spy_net >= 0
     dg_val_txt = "{:+.2f} $bn/1%".format(hgex_spy_net)
-elif gex_nvda["has"]:
-    dg_has, dg_source = True, "NVDA proxy (fallback)"
-    dg_positive = gex_nvda["positive"]
-    dg_val_txt = gex_monitor.fmt_gex(gex_nvda["net_gex"])
 else:
     dg_has, dg_source, dg_positive, dg_val_txt = False, "N/A", False, "N/A"
 
-# Amplification badge source (homebrew SPY/QQQ negative -> else NVDA)
+# Amplification badge source (homebrew SPY/QQQ negative)
 _hb_any = hgex_spy_has or (qqq_res.get("ok") and qqq_res.get("net_gex") is not None)
 if _hb_any:
     amp_neg = (hgex_spy_has and hgex_spy_net < 0) or \
               (qqq_res.get("ok") and qqq_res.get("net_gex") is not None and qqq_res["net_gex"] < 0)
     amp_src = "SPY/QQQ"
 else:
-    amp_neg = gex_nvda["has"] and not gex_nvda["positive"]
-    amp_src = "NVDA"
+    amp_neg = False
+    amp_src = "N/A"
 print("Dealer-gamma signal: source={} positive={} amp_neg={} ({})".format(
     dg_source, dg_positive if dg_has else "N/A", amp_neg, amp_src))
 
@@ -2158,8 +2128,6 @@ for _combo in [("Low", "Falling", 40.0, "positive", 35.0),
                ("Low", "Falling", 92.0, "positive", 38.0)]:
     print("  stance{} -> {} | {}".format(_combo, *takeaway_stance(*_combo)[:2]))
 
-j_gex_d = gex_hist_d
-j_gex_v = gex_hist_v
 
 # Homebrew GEX display precompute
 def _fmt_bn(v):
@@ -2732,8 +2700,6 @@ parts.append('</div>')
 parts.append('</div>')  # gex-section (homebrew)
 parts.append(hgex_state_block(hgex_state))
 
-# FlashAlpha single-stock GEX Monitor section (unchanged)
-parts.append(gex_section_html)
 
 # charts grid
 parts.append('<div class="charts-grid">')
@@ -2754,7 +2720,6 @@ parts.append('<div class="bottom-item">Tail table: <span>Yahoo ^GSPC weekly</spa
 parts.append('<div class="bottom-item">COT: <span>CFTC Socrata TFF + Disaggregated</span></div>')
 parts.append('<div class="bottom-item">Funding: <span>Binance (CoinGecko) + OKX API</span></div>')
 parts.append('<div class="bottom-item">Index GEX: <span>homebrew SPY/QQQ (Yahoo option chains, BS gamma)</span></div>')
-parts.append('<div class="bottom-item">GEX: <span>FlashAlpha free tier (NVDA/AAPL/AMD/MU, 5 req/day)</span></div>')
 parts.append('</div>')
 
 # JS
@@ -2887,15 +2852,6 @@ parts.append('      {step:"all",label:"all"}],font:{size:12,color:"#94a3b8"},bgc
 parts.append('    rangeslider:{visible:false}})});')
 parts.append('  Plotly.newPlot("chart-lpi-full",[{x:lpiFD,y:lpiFV,type:"scatter",mode:"lines",line:{color:"#8b5cf6",width:1.5},fill:"tozeroy",fillcolor:"rgba(139,92,246,0.08)"}],Tf,CFG);')
 parts.append('}else{var ef=document.getElementById("chart-lpi-full");if(ef)ef.innerHTML="<div style=\\"color:#94a3b8;font-size:12px;padding:20px 0\\">History unavailable</div>";}')
-parts.append('var gexD=' + j_gex_d + ',gexV=' + j_gex_v + ';')
-parts.append('var gexEl=document.getElementById("chart-gex-nvda");')
-parts.append('if(gexEl&&gexD.length>=2){')
-parts.append('  var gexColors=gexV.map(function(v){return v>=0?"#10b981":"#ef4444";});')
-parts.append('  var gexZero={type:"line",x0:0,x1:1,xref:"paper",y0:0,y1:0,line:{color:"#475569",width:1}};')
-parts.append('  Plotly.newPlot("chart-gex-nvda",[{x:gexD,y:gexV,type:"scatter",mode:"lines+markers",')
-parts.append('    line:{color:"#6366f1",width:2},marker:{color:gexColors,size:5},fill:"tozeroy",fillcolor:"rgba(99,102,241,0.07)"}],')
-parts.append('    Object.assign({},T,{shapes:[gexZero],yaxis:Object.assign({},T.yaxis,{title:{text:"$M",font:{size:12}}}),xaxis:Object.assign({},T.xaxis,{tickangle:-35})}),CFG);')
-parts.append('}')
 parts.append('var hgS=' + j_hgex_strk + ',hgV=' + j_hgex_val + ',hgSpot=' + j_hgex_spot + ',hgFlip=' + j_hgex_flip + ';')
 parts.append('var hgEl=document.getElementById("chart-hgex-spy");')
 parts.append('if(hgEl&&hgS.length){')
@@ -3017,7 +2973,7 @@ parts.append('  if(scNarrow){var ul=document.createElement("ul");ul.className="s
 parts.append('  scIds.push("chart-stress-cal");')
 parts.append('}')
 parts.append('window.addEventListener("resize",function(){')
-parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-gex-nvda","chart-hgex-spy"].concat(sfrIds).concat(cotChartIds).concat(sparkIds).concat(clkIds).concat(tailIds).concat(scIds).forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
+parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-hgex-spy"].concat(sfrIds).concat(cotChartIds).concat(sparkIds).concat(clkIds).concat(tailIds).concat(scIds).forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
 parts.append('});')
 parts.append('})();')
 parts.append('</script></body></html>')

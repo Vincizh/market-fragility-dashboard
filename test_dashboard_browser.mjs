@@ -115,10 +115,12 @@ try {
         panelOverflow: panel.scrollWidth - panel.clientWidth,
         legacyPanels: document.querySelectorAll('.sofr-panel').length,
         legacyKpis: document.querySelectorAll('.sofr-kpi').length,
+        singleStockGex: /GEX Monitor|FlashAlpha|NVDA net GEX/i.test(document.body.innerText) || !!document.getElementById('chart-gex-nvda'),
       };
     }, CHART_IDS);
 
     // ---- Section structure -------------------------------------------------
+    check(`${tag} no single-stock GEX monitor remains`, !state.singleStockGex);
     check(`${tag} unified funding-pressure panel present`, state.hasPanel);
     check(`${tag} resonance score and x/3 summary rendered`,
       /^[0-3]$/.test(state.score || '') && /\/\s*3 conditions active/.test(state.summary || ''),
