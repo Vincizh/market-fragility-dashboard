@@ -33,6 +33,7 @@ import fast_metrics as fm
 import fred_catalog
 import fred_modules
 import fred_monitor
+import fred_render
 import health
 
 print("Starting dashboard generation...")
@@ -2370,6 +2371,7 @@ parts.append('.chart-title{font-size:12px;font-weight:600;color:#94a3b8;text-tra
 parts.append('.chart-subtitle{font-size:12px;color:#7c8aa0;margin:3px 0 10px;line-height:1.4}')
 parts.append('.bottom-bar{background:#0a0c10;border-top:1px solid #1e2433;padding:10px 20px;display:flex;flex-wrap:wrap;gap:16px}')
 parts.append('.bottom-item{font-size:12px;color:#7c8aa0}.bottom-item span{color:#94a3b8}')
+parts.append(fred_render.CSS)
 parts.append('</style></head><body>')
 
 # header
@@ -2482,6 +2484,9 @@ parts.append('<div class="read-guide"><b>Read guide.</b> <b>0/3</b> normal, no r
              'shows an incomplete-data state instead. The lower-threshold (more sensitive) +2bp / +5bp bands are kept as analytical '
              'reference lines: they are this dashboard\u2019s persistence-based statistical bands, while the '
              'emphasized +3bp line is the operator\u2019s strategy threshold.</div>')
+# v2: backstops and repo dispersion live inside the funding panel
+parts.append(fred_render.backstops_html(fred_mod["funding"]))
+parts.append(fred_render.funding_extras_html(fred_mod["funding"]))
 parts.append(fp_details + '</div>')
 
 # gauge card with regime badge
@@ -2576,6 +2581,11 @@ parts.append('<span class="cool">Jul:</span> lowest pressure month of H2')
 parts.append('</div>')
 
 parts.append('</div>')  # lpi-section
+
+# v2 modules (interim placement; reorganized in the layout phase)
+parts.append(fred_render.fedbs_html(fred_mod["fedbs"]))
+parts.append(fred_render.credit_html(fred_mod["credit"]))
+parts.append(fred_render.rates_html(fred_mod["rates"]))
 
 # ===================== LAYER 2 — CROWDING =====================
 parts.append('<div class="layer-header">第二层 · 拥挤度 Crowding <span>CFTC COT positioning</span>'
@@ -3000,6 +3010,10 @@ parts.append('     yaxis:{visible:false,range:[-1,1.6],fixedrange:true,type:"lin
 parts.append('  if(scNarrow){var ul=document.createElement("ul");ul.className="sc-list";ul.setAttribute("data-testid","stress-cal-list");SC.forEach(function(m){var li=document.createElement("li");var dot=document.createElement("span");dot.className="sc-dot";dot.style.background=m.color;li.appendChild(dot);li.appendChild(document.createTextNode(m.d+"  "+String(m.label).replace(/<br>/g," ")));ul.appendChild(li);});scEl.parentNode.insertBefore(ul,scEl.nextSibling);}')
 parts.append('  scIds.push("chart-stress-cal");')
 parts.append('}')
+_mfd_charts = {"funding": fred_mod["funding"]["charts"],
+               "fedbs": fred_mod["fedbs"]["charts"] + ([fred_mod["fedbs"]["comp_chart"]] if fred_mod["fedbs"].get("comp_chart") else []),
+               "credit": fred_mod["credit"]["charts"], "rates": fred_mod["rates"]["charts"]}
+parts.append(fred_render.js_for(_mfd_charts))
 parts.append('window.addEventListener("resize",function(){')
 parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-hgex-spy"].concat(sfrIds).concat(cotChartIds).concat(sparkIds).concat(clkIds).concat(tailIds).concat(scIds).forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
 parts.append('});')

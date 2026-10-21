@@ -252,6 +252,24 @@ try {
       [...document.querySelectorAll('#chart-sofr-iorb .hoverlayer text')].map((t) => t.textContent).join(' | '));
     check(`${tag} tooltip shows numeric bp values`, /-?\d+(\.\d+)?\s*bp/.test(hover), hover.slice(0, 160));
 
+    // ---- v2 FRED modules ----------------------------------------------------
+    const v2 = await page.evaluate(() => {
+      const secs = ['section-fed-bs', 'section-credit', 'section-rates'].map((t) => !!document.querySelector(`[data-testid="${t}"]`));
+      const cards = ['mc-oas-ccc', 'mc-ccc-bb', 'mc-dgs30', 'mc-tp10', 'mc-fima', 'mc-wshobl', 'mc-sofr-disp']
+        .map((t) => !!document.querySelector(`[data-testid="${t}"]`));
+      const visible = [...document.querySelectorAll('.mfd-chart')].filter((el) => el.offsetParent !== null && el.clientWidth > 0);
+      const drawn = visible.filter((el) => el.querySelector('svg.main-svg'));
+      return { secs, cards, visible: visible.length, drawn: drawn.length };
+    });
+    check(`${tag} fed balance sheet, credit and rates sections present`, v2.secs.every(Boolean), JSON.stringify(v2.secs));
+    check(`${tag} key v2 cards present`, v2.cards.every(Boolean), JSON.stringify(v2.cards));
+    check(`${tag} visible v2 charts are drawn`, v2.visible >= 4 && v2.drawn === v2.visible, `${v2.drawn}/${v2.visible}`);
+    await page.evaluate(() => document.querySelectorAll('details').forEach((d) => { d.open = true; }));
+    await page.waitForTimeout(800);
+    const widths = await page.evaluate(() => [...document.querySelectorAll('.mfd-chart')].map((el) => el.clientWidth));
+    check(`${tag} all v2 charts have width after opening details`, widths.length >= 8 && widths.every((w) => w > 0), widths.join(','));
+    await page.evaluate(() => document.querySelectorAll('details').forEach((d) => { d.open = false; }));
+
     // ---- Layout / hygiene -------------------------------------------------
     check(`${tag} no horizontal overflow`, state.docOverflow <= 1 && state.panelOverflow <= 1,
       `document=${state.docOverflow}px panel=${state.panelOverflow}px`);

@@ -314,6 +314,12 @@ def build_fedbs(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # 4c Credit
 # ---------------------------------------------------------------------------
+OAS_WHAT = {"HY": "The full US high-yield index: the headline price of junk-bond credit risk.",
+            "IG": "The US investment-grade corporate index: the price of credit risk for high-quality issuers.",
+            "BBB": "The lowest investment-grade rating, one step above high yield and the largest fallen-angel risk pool.",
+            "BB": "The strongest high-yield bucket, the reference for how much safe junk pays over Treasuries.",
+            "B": "The middle high-yield bucket, more sensitive to refinancing conditions than BB.",
+            "CCC": "The weakest rating bucket, the first place stress shows up when investors stop funding weak balance sheets."}
 OAS_ORDER = (("BAMLH0A0HYM2", "HY", "High yield OAS · 高收益债 OAS"),
              ("BAMLC0A0CM", "IG", "Investment grade OAS · 投资级 OAS"),
              ("BAMLC0A4CBBB", "BBB", "BBB OAS"),
@@ -335,7 +341,7 @@ def _oas_card(sid: str, tag: str, title: str, S, now) -> dict[str, Any]:
     return _card(
         "oas-" + tag.lower(), title, [sid], value=_fmt(float(bp.iloc[-1]), "bp", 0), state=state,
         sub="20d {} · pctile {} vs {}y · change z {}".format(_fmt(chg20, "bp", 0, True), _num(pct, 0), yrs, _num(z, 1, True)),
-        what="ICE BofA option-adjusted spread over Treasuries, in basis points (FRED publishes percent).",
+        what=OAS_WHAT.get(tag, "") + " ICE BofA OAS, in basis points.",
         asof=f.observation_date, cadence=spec.cadence, stale=f.stale,
         why="Credit spreads price default and liquidity risk. A widening that starts in the weakest rating bucket tends to precede a broad move.",
         limits="Index-level OAS is not an AI-issuer credit spread. FRED carries only about 3 years of ICE BofA history, so percentiles use that window.",
@@ -413,7 +419,7 @@ def build_credit(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
     # charts
     charts: list[dict[str, Any]] = []
     traces = []
-    for sid, name, color in (("BAMLH0A1HYBB", "BB", "#f59e0b"), ("BAMLH0A2HYB", "B", "#f97316"), ("BAMLH0A3HYC", "CCC and lower", "#ef4444")):
+    for sid, name, color in (("BAMLH0A1HYBB", "BB", "#38bdf8"), ("BAMLH0A2HYB", "B", "#f59e0b"), ("BAMLH0A3HYC", "CCC and lower", "#ef4444")):
         t = _disp(S, sid)
         if t is not None:
             traces.append(dict(name=name, color=color, type="scatter", **mon.sample_series(t, 1.0, 300, digits=0)))
