@@ -2106,8 +2106,9 @@ score_tiles = [
      "sub": ("{} · {} · as of {}".format(reg_level, reg_dir, lpi_asof_txt) if lpi_has else "insufficient data")
             + (" · stale" if (lpi_has and lpi_stale) else ""), "spark": _lpi_spark, "target": "sec-lpi"},
     {"id": "funding", "title": "Funding 资金面", "value": "{}/3".format(fp_count) if fp_state != "unavailable" else "N/A",
-     "state": _fund_state, "sub": "resonance · backstops in use {}/{} · discount window {}".format(
-         _fm["backstops_in_use"], _fm["backstops_avail"], _fm.get("dw_state", "unavailable").replace("_", " ")),
+     "state": _fund_state, "sub": "SOFR-IORB {} · resonance · backstops in use {}/{}".format(
+         (("{:+.1f} bp".format(float((sofr_spread.get("raw_bp") or [float("nan")])[-1]))) if sofr_spread.get("raw_bp") else "n/a"),
+         _fm["backstops_in_use"], _fm["backstops_avail"]),
      "spark": [float(v) for v in _sofr_f if v == v], "target": "sec-funding"},
     {"id": "credit", "title": "Credit 信用 · HY OAS", "value": _credit_m["hy_value"], "state": _credit_m["state"],
      "sub": "CCC minus BB {} · {}".format(_credit_m["ccc_bb"], _credit_m["ccc_bb_sub"].split(" · ")[0]),
@@ -2157,7 +2158,17 @@ if _snap_base:
     wc_note = "Indicator states compare with 7 days earlier, rebuilt from each series' own history. Scorecard states compare with the stored snapshot of " + _snap_base + "."
 else:
     wc_note = "Indicator states compare with 7 days earlier, rebuilt from each series' own history. Scorecard comparison is building history: {} daily snapshot(s) stored, one that is 5 to 10 days old is needed.".format(len(_dash_days))
-overview_html = layout_render.scorecard_html(score_tiles) + layout_render.changes_html(wc_items, wc_note)
+_sofr_ok = bool(sofr_spread.get("dates")) and bool(leg_sofr.get("available")) and not (leg_sofr.get("freshness") or {}).get("stale")
+_raw_l, _fil_l = (sofr_spread.get("raw_bp") or []), (sofr_spread.get("filtered_bp") or [])
+_fmt_bp = lambda v: "{:+.1f} bp".format(float(v)) if v is not None and v == v else "n/a"
+_rule_state = leg_sofr.get("state", "unavailable")
+sofr_hero = layout_render.sofr_hero_html(
+    _fmt_bp(_raw_l[-1] if _raw_l else None) if _sofr_ok else "n/a", _fmt_bp(_fil_l[-1] if _fil_l else None) if _sofr_ok else "n/a",
+    leg_sofr.get("state_label", "unavailable") if _sofr_ok else "unavailable",
+    {"normal": "off", "approaching": "near", "active": "on", "elevated": "on"}.get(_rule_state, "off"),
+    "observation " + str(leg_sofr.get("observation_date") or "n/a") + (" (stale)" if (leg_sofr.get("freshness") or {}).get("stale") else ""),
+    leg_sofr.get("detail", ""), (sofr_spread.get("dates") or ["n/a"])[0], _sofr_ok)
+overview_html = layout_render.scorecard_html(score_tiles) + sofr_hero + layout_render.changes_html(wc_items, wc_note)
 
 # Decision-table demonstration (forced combos) + degraded-mode check for logs
 for _combo in [("Low", "Falling", 40.0, "positive", 35.0),
@@ -2405,7 +2416,7 @@ parts.append('<div class="header"><div class="header-left">')
 parts.append('<h1>Market Fragility Dashboard <span>/ NDX</span></h1>')
 parts.append('<p>4-layer risk stack: fragility · conditions · crowding · amplifiers &middot; scheduled hourly via GitHub Actions, actual cadence may lag</p></div>')
 parts.append('<div class="header-right"><div class="timestamp">Last updated: ' + now_str + '</div>@@HEALTH_CHIP@@</div></div>')
-parts.append(layout_render.nav_html([("overview", "Overview"), ("sec-lpi", "LPI"), ("sec-funding", "Funding"), ("sec-fedbs", "Fed balance sheet"),
+parts.append(layout_render.nav_html([("overview", "Overview"), ("sofr-hero", "SOFR-IORB"), ("sec-lpi", "LPI"), ("sec-funding", "Funding"), ("sec-fedbs", "Fed balance sheet"),
                                      ("sec-credit", "Credit"), ("sec-rates", "Rates"), ("sec-crowding", "Crowding"),
                                      ("sec-amplifiers", "Amplifiers"), ("sec-calendar", "Calendar"), ("sec-methods", "Methods")]))
 
@@ -2863,6 +2874,16 @@ parts.append('    {x:noiseX,y:noiseY,type:"scatter",mode:"markers",name:"Calenda
 parts.append('  var sfrLayout=Object.assign({},T,{height:250,hovermode:"x unified",showlegend:true,legend:{orientation:"h",font:{size:12},y:1.18,x:0},margin:{l:54,r:12,t:30,b:30},shapes:sfrShapes,annotations:sfrAnn,xaxis:Object.assign({},T.xaxis,{type:"date",nticks:6}),yaxis:Object.assign({},T.yaxis,{title:{text:"basis points",font:{size:11}},zeroline:true})});')
 parts.append('  Plotly.newPlot("chart-sofr-iorb",sfrTraces,sfrLayout,CFG);')
 parts.append('  FP_PANELS.push({id:"chart-sofr-iorb",dates:SFR.dates,series:[SFR.raw,SFR.filtered],must:[0,3]});sfrIds.push("chart-sofr-iorb");')
+parts.append('  var heroEl=document.getElementById("chart-sofr-hero");')
+parts.append('  if(heroEl){var heroTr=[{x:SFR.dates,y:SFR.raw,type:"scatter",mode:"lines",name:"Raw daily",line:{color:"#64748b",width:1.2},customdata:rawCd,hovertemplate:"%{x}<br>raw %{y:+.1f} bp<br>%{customdata}<extra></extra>"},')
+parts.append('    {x:SFR.dates,y:SFR.filtered,type:"scatter",mode:"lines",name:"5d median (non-calendar)",line:{color:"#a5b4fc",width:3},customdata:rawCd,hovertemplate:"%{x}<br>5d median %{y:+.1f} bp<br>%{customdata}<extra></extra>"}];')
+parts.append('    var heroLay=Object.assign({},T,{height:FP_NARROW?220:280,hovermode:"x unified",showlegend:!FP_NARROW,legend:{orientation:"h",font:{size:12},y:1.12,x:0},margin:{l:48,r:12,t:FP_NARROW?10:26,b:30},shapes:sfrShapes,annotations:sfrAnn,xaxis:Object.assign({},T.xaxis,{type:"date",nticks:FP_NARROW?5:8}),yaxis:Object.assign({},T.yaxis,{title:{text:"bp",font:{size:12}},zeroline:false})});')
+parts.append('    Plotly.newPlot("chart-sofr-hero",heroTr,heroLay,CFG);sfrIds.push("chart-sofr-hero");')
+parts.append('    function heroFit(days){var n=SFR.dates.length,last=new Date(SFR.dates[n-1]+"T00:00:00Z"),first=days?new Date(last.getTime()-days*86400000):new Date(SFR.dates[0]+"T00:00:00Z");var lo=0,hi=3;')
+parts.append('      for(var i=0;i<n;i++){if(new Date(SFR.dates[i]+"T00:00:00Z")>=first){[SFR.raw[i],SFR.filtered[i]].forEach(function(v){if(fpNum(v)){lo=Math.min(lo,v);hi=Math.max(hi,v);}});}}')
+parts.append('      var pad=Math.max(1,(hi-lo)*0.08);Plotly.relayout("chart-sofr-hero",{"xaxis.range":[first.toISOString().slice(0,10),new Date(last.getTime()+86400000*2).toISOString().slice(0,10)],"yaxis.range":[lo-pad,hi+pad]});}')
+parts.append('    heroFit(183);')
+parts.append('    document.querySelectorAll(".sofr-hero-range").forEach(function(b){b.addEventListener("click",function(){document.querySelectorAll(".sofr-hero-range").forEach(function(x){x.classList.toggle("active",x===b);});heroFit(parseInt(b.getAttribute("data-days"),10));});});}')
 parts.append('  var chColors=SFR.changes.map(function(v){return v===null?"#64748b":(v>0?"#f97316":(v<0?"#14b8a6":"#64748b"));});')
 parts.append('  var chTrace={x:SFR.dates,y:SFR.changes,type:"bar",marker:{color:chColors},customdata:rawCd,hovertemplate:"%{x}<br>daily change %{y:+.1f} bp<br>%{customdata}<extra></extra>"};')
 parts.append('  var chLayout=Object.assign({},T,{height:130,margin:{l:54,r:12,t:8,b:28},shapes:[{type:"line",xref:"paper",x0:0,x1:1,y0:0,y1:0,line:{color:"#64748b",width:1}}],xaxis:Object.assign({},T.xaxis,{type:"date",nticks:6}),yaxis:Object.assign({},T.yaxis,{title:{text:"Δ bp",font:{size:11}}})});')

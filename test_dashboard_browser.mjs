@@ -289,7 +289,7 @@ try {
     }));
     check(`${tag} scorecard has six tiles`, lay.tiles === 6, String(lay.tiles));
     check(`${tag} what-changed panel present`, lay.wc);
-    check(`${tag} sticky navigation has ten links`, lay.navLinks === 10, String(lay.navLinks));
+    check(`${tag} sticky navigation has eleven links`, lay.navLinks === 11, String(lay.navLinks));
     check(`${tag} health chip shows source counts`, /Sources \d+\/\d+/.test(lay.chip), lay.chip);
     check(`${tag} takeaway has four numbered points`, lay.takeaway === 4, String(lay.takeaway));
     check(`${tag} four layer headers`, lay.layers === 4, String(lay.layers));
@@ -301,6 +301,28 @@ try {
     } else {
       check(`${tag} all sections open by default`, defaults.open.length === 9, String(defaults.open.length));
     }
+    // SOFR minus IORB monitor: always visible in the overview, drawn as a line chart, range-controlled
+    const hero = await page.evaluate(async () => {
+      const el = document.getElementById('chart-sofr-hero');
+      const box = document.querySelector('[data-testid="sofr-hero"]');
+      if (!el || !box) return { present: false };
+      const out = { present: true, drawn: !!el.querySelector('.main-svg'), width: el.clientWidth,
+        text: box.textContent, lines: (el.data || []).map((t) => t.mode + ':' + t.name), visibleTop: box.getBoundingClientRect().top + window.pageYOffset };
+      const span = () => { const r = el._fullLayout.xaxis.range; return Math.round((new Date(r[1]) - new Date(r[0])) / 86400000); };
+      const spans = {};
+      for (const d of ['92', '365', '0']) {
+        document.querySelector(`.sofr-hero-range[data-days="${d}"]`).click();
+        await new Promise((r) => setTimeout(r, 400));
+        spans[d] = span();
+      }
+      out.spans = spans;
+      return out;
+    });
+    check(`${tag} SOFR-IORB monitor present in overview`, hero.present && hero.drawn && hero.width > 200, JSON.stringify({ w: hero.width }));
+    check(`${tag} SOFR-IORB monitor is a line chart with raw and 5d median`, hero.present && hero.lines.length >= 2 && hero.lines.every((l) => l.startsWith('lines:')), (hero.lines || []).join(','));
+    check(`${tag} SOFR-IORB monitor shows latest, median and rule`, hero.present && /Latest/.test(hero.text) && /5d median/.test(hero.text) && /Strategy rule/.test(hero.text) && /[+-]\d+\.\d bp/.test(hero.text));
+    check(`${tag} SOFR-IORB range buttons change the window`, hero.present && hero.spans['92'] < hero.spans['365'] && hero.spans['365'] < hero.spans['0'], JSON.stringify(hero.spans));
+    check(`${tag} SOFR-IORB monitor sits above the first layer`, hero.present && hero.visibleTop < 1500, String(Math.round(hero.visibleTop)));
     const calInfo = await page.evaluate(() => ({
       rows: document.querySelectorAll('[data-testid="cal-list"] li').length,
       text: document.getElementById('sec-calendar').textContent,

@@ -29,6 +29,15 @@ CSS = (
     ".score.st-na .score-val,.score.st-context .score-val{color:var(--faint)}"
     ".score-row{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:6px}"
     ".score-sub{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.4}"
+    ".sofr-hero{margin:14px 20px 4px;background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:12px;padding:12px 16px}"
+    ".sh-head{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:flex-start;justify-content:space-between}"
+    ".sh-title{font-size:14px;font-weight:800;color:var(--text)}.sh-title span{font-size:12px;font-weight:500;color:var(--faint);margin-left:6px}"
+    ".sh-sub{font-size:11px;color:var(--faint);margin-top:2px;max-width:520px}"
+    ".sh-vals{display:flex;gap:22px;flex-wrap:wrap}.sh-vals b{display:block;font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--text)}"
+    ".sh-vals b.sh-rule{font-size:14px;line-height:1.5}.sh-vals b.sh-rule.on{color:var(--elev)}.sh-vals b.sh-rule.near{color:var(--watch)}.sh-vals b.sh-rule.off{color:var(--ok)}"
+    ".sh-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}"
+    ".sh-ranges{display:flex;gap:6px}.sofr-hero-range{background:#1e2433;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer}.sofr-hero-range.active{background:var(--accent);color:#fff;border-color:var(--accent)}"
+    ".sofr-hero-chart{width:100%;margin-top:6px}.sh-note{font-size:11px;color:var(--faint);margin-top:6px;line-height:1.5}"
     ".what-changed{margin:14px 20px 4px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px}"
     ".what-changed ul{margin:0;padding-left:18px;font-size:13px;color:#cbd5e1;line-height:1.65}"
     ".what-changed .wc-note{font-size:12px;color:var(--faint);margin-top:6px}"
@@ -64,7 +73,7 @@ CSS = (
     ".cal-list .k{flex:0 0 auto;font-size:11px;border-radius:4px;padding:2px 6px;background:#1e2433;color:var(--muted);align-self:flex-start}"
     ".cal-list .k.announced{color:var(--ok)}.cal-list .k.estimated{color:var(--watch)}"
     "@media(max-width:1100px){.score-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}"
-    "@media(max-width:640px){.score-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.overview,.what-changed{margin-left:12px;margin-right:12px}"
+    "@media(max-width:640px){.score-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.overview,.what-changed,.sofr-hero{margin-left:12px;margin-right:12px}.sofr-hero{padding:10px 12px}"
     "details.sec{margin-left:10px;margin-right:10px}.sec-body{padding:0 10px 12px}.sec-nav{padding:8px 10px}.score-val{font-size:20px}"
     ".layer-header{margin-left:12px;margin-right:12px}}"
 )
@@ -97,6 +106,20 @@ def scorecard_html(tiles: list[dict[str, Any]]) -> str:
                        spark=fr.spark_svg(t.get("spark", []), st, 64, 22) if t.get("spark") else "", sub=e(t["sub"])))
     out.append("</div></div>")
     return "".join(out)
+
+
+def sofr_hero_html(latest: str, median: str, rule: str, rule_cls: str, obs: str, detail: str, since: str, available: bool) -> str:
+    btns = "".join('<button type="button" class="sofr-hero-range{}" data-days="{}">{}</button>'.format(
+        " active" if lbl == "6M" else "", days, lbl) for lbl, days in (("3M", 92), ("6M", 183), ("1Y", 365), ("3Y", 1096), ("Max", 0)))
+    body = ('<div id="chart-sofr-hero" class="sofr-hero-chart"></div>' if available else
+            '<div class="mod-note">SOFR minus IORB is unavailable or stale this run; no current value is shown.</div>')
+    return ('<div class="sofr-hero" id="sofr-hero" data-testid="sofr-hero"><div class="sh-head"><div><div class="sh-title">SOFR minus IORB monitor <span>资金价格监测</span></div>'
+            '<div class="sh-sub">basis points, daily since {since} &middot; raw print and 5-observation median that skips calendar-noise days</div></div>'
+            '<div class="sh-vals"><div><span class="sh-lbl">Latest</span><b>{latest}</b></div><div><span class="sh-lbl">5d median</span><b>{median}</b></div>'
+            '<div><span class="sh-lbl">Strategy rule</span><b class="{rcls}">{rule}</b></div></div>'
+            '<div class="sh-ranges">{btns}</div></div>{body}'
+            '<div class="sh-note">{obs} &middot; {detail}. The +3bp line is the operator strategy threshold, not an empirical law. Source: NY Fed SOFR and Federal Reserve IORB.</div></div>').format(
+        since=e(since), latest=e(latest), median=e(median), rule=e(rule), rcls=e(rule_cls), btns=btns, body=body, obs=e(obs), detail=e(detail))
 
 
 def changes_html(items: list[str], base_note: str) -> str:
