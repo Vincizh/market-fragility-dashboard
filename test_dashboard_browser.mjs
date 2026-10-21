@@ -62,6 +62,7 @@ try {
     const defaults = await page.evaluate(() => ({
       open: [...document.querySelectorAll('details.sec')].filter((d) => d.open).map((d) => d.id),
       height: document.documentElement.scrollHeight,
+      aboutOpen: [...document.querySelectorAll('.mc details.metric-details[open]')].length,
     }));
     await page.evaluate(() => document.querySelectorAll('details.sec').forEach((d) => { d.open = true; }));
     await page.waitForFunction((ids) => ids.every((id) => {
@@ -296,7 +297,7 @@ try {
     check(`${tag} old summary strip removed`, !lay.oldStrip);
     check(`${tag} daily state snapshot embedded`, lay.stateScript);
     if (vp.label === 'mobile') {
-      check(`${tag} default open sections are Overview-first (LPI, Credit)`, defaults.open.join(',') === 'sec-lpi,sec-credit', defaults.open.join(','));
+      check(`${tag} default open section on mobile is the LPI gauge only`, defaults.open.join(',') === 'sec-lpi', defaults.open.join(','));
       check(`${tag} default page height under 9000px`, defaults.height < 9000, String(defaults.height));
     } else {
       check(`${tag} all sections open by default`, defaults.open.length === 9, String(defaults.open.length));
@@ -323,6 +324,28 @@ try {
     check(`${tag} SOFR-IORB monitor shows latest, median and rule`, hero.present && /Latest/.test(hero.text) && /5d median/.test(hero.text) && /Strategy rule/.test(hero.text) && /[+-]\d+\.\d bp/.test(hero.text));
     check(`${tag} SOFR-IORB range buttons change the window`, hero.present && hero.spans['92'] < hero.spans['365'] && hero.spans['365'] < hero.spans['0'], JSON.stringify(hero.spans));
     check(`${tag} SOFR-IORB monitor sits above the first layer`, hero.present && hero.visibleTop < 1500, String(Math.round(hero.visibleTop)));
+    // Chart-first metric cards: every live card carries its own drawn time series, text sits behind About
+    const mcs = await page.evaluate(() => {
+      const cards = [...document.querySelectorAll('.mc')];
+      const live = cards.filter((c) => !/not rendered as a current reading|No data this run/.test(c.textContent));
+      const srf = document.querySelector('[data-testid="mc-srf"]');
+      return {
+        total: cards.length,
+        noChart: live.filter((c) => !c.querySelector('.mc-chart')).map((c) => c.getAttribute('data-testid')),
+        undrawn: live.filter((c) => { const ch = c.querySelector('.mc-chart'); return ch && (!ch.querySelector('.main-svg') || ch.clientWidth < 100); }).map((c) => c.getAttribute('data-testid')),
+        shortChart: live.filter((c) => { const ch = c.querySelector('.mc-chart'); return ch && ch.clientHeight < 150; }).length,
+        srfText: srf ? srf.querySelector('.mc-facts').textContent : '',
+        srfValue: srf ? srf.querySelector('.mc-value').textContent : '',
+        resGdp: !!document.querySelector('[data-testid="mcc-resgdp"] .main-svg'),
+      };
+    });
+    check(`${tag} at least 30 metric cards`, mcs.total >= 30, String(mcs.total));
+    check(`${tag} every live metric card has a chart`, mcs.noChart.length === 0, mcs.noChart.join(','));
+    check(`${tag} every metric chart is drawn with width`, mcs.undrawn.length === 0, mcs.undrawn.join(','));
+    check(`${tag} metric charts are at least 150px tall`, mcs.shortChart === 0, String(mcs.shortChart));
+    check(`${tag} About text is collapsed by default`, defaults.aboutOpen === 0, String(defaults.aboutOpen));
+    check(`${tag} standing repo card keeps value, floor and 3y percentile`, /\$[\d.]+B/.test(mcs.srfValue) && /floor/.test(mcs.srfText) && /p95/.test(mcs.srfText), mcs.srfValue + ' | ' + mcs.srfText);
+    check(`${tag} reserves to GDP card has its chart`, mcs.resGdp);
     const calInfo = await page.evaluate(() => ({
       rows: document.querySelectorAll('[data-testid="cal-list"] li').length,
       text: document.getElementById('sec-calendar').textContent,

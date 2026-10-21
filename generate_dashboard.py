@@ -2131,7 +2131,7 @@ _dash_days = dash_state.update(_dash_days, _today_iso, _snapshot)
 
 _wk_cut = pd.Timestamp(datetime.now(timezone.utc).date()) - pd.Timedelta(days=7)
 try:
-    _fred_prev = fred_modules.build_all(fred_modules.truncate(fred_series, _wk_cut), fm.utc_now() - pd.Timedelta(days=7))
+    _fred_prev = fred_modules.build_all(fred_modules.truncate(fred_series, _wk_cut), fm.utc_now() - pd.Timedelta(days=7), charts=False)
     _state_chg = fred_modules.state_changes(fred_mod, _fred_prev)
 except Exception as _exc:  # noqa: BLE001
     print("what-changed state comparison failed:", _exc)
@@ -2444,12 +2444,21 @@ parts.append('<div class="layer-header">第一层 · 脆弱度 Fragility <span>L
 _blk("fastcards")
 # Fast funding/liquidity variables are deliberately compact and sit beneath the
 # layer heading rather than in the top-level summary strip.
-parts.append('<div class="lpi-heading">Supplementary confirmation 补充确认 <span>NY Fed repo, reserves to GDP, SOFR tail</span></div>')
-parts.append('<div class="fast-grid">'
-             + _fast_card('Reserves / GDP', res_value, res_sub, reserves, res_status, res_details)
-             + _fast_card('NY Fed repo accepted · 7d', repo_value, repo_sub, repo, repo_status, repo_details)
-             + _fast_card('SOFR p99 − median', tail_value, 'Tail-rate pressure; use with persistent spread and repo use.', sofr_tail, 'normal', tail_details)
-             + '</div>')
+parts.append('<div class="lpi-heading">Supplementary confirmation 补充确认 <span>reserves to GDP; repo use and SOFR tail are the standing repo and SOFR dispersion cards above</span></div>')
+_res_chart_id = ""
+if _fast_live(reserves) and reserves.get("history"):
+    _rh = pd.Series(reserves["history"], index=pd.to_datetime(reserves["dates"]))
+    fred_mod["funding"]["card_charts"].append({
+        "id": "mcc-resgdp", "unit": "pct", "default_range": "1Y", "mini": True,
+        "traces": [{"name": "Reserves / GDP", "color": "#f59e0b" if res_status != "normal" else "#10b981", "type": "scatter",
+                    "x": list(reserves["dates"]), "y": [round(float(v), 3) for v in reserves["history"]]}],
+        "refs": [{"y": round(float(_rh.quantile(0.20)), 2), "label": "20th pctile (warning)", "color": "#f59e0b"},
+                 {"y": round(float(_rh.quantile(0.10)), 2), "label": "10th pctile (elevated)", "color": "#ef4444"}]})
+    _res_chart_id = "mcc-resgdp"
+_res_card = _fast_card('Reserves / GDP', res_value, res_sub, reserves, res_status, res_details)
+if _res_chart_id:
+    _res_card = _res_card.replace('<div class="fast-stamp">', '<div id="mcc-resgdp" class="mc-chart mfd-chart" data-testid="mcc-resgdp"></div><div class="fast-stamp">', 1)
+parts.append('<div class="fast-grid">' + _res_card + '</div>')
 
 _blk("funding")
 # --- Dollar Funding Pressure section (absorbs the standalone SOFR-IORB panel) ---
@@ -3083,9 +3092,10 @@ parts.append('     xaxis:{type:"date",gridcolor:"#1e2433",tickformat:"%b %d",tic
 parts.append('     yaxis:{gridcolor:"#1e2433",tickfont:{size:12},fixedrange:true,rangemode:"tozero",dtick:1,title:{text:"events",font:{size:12}}}}),CFG);')
 parts.append('  scIds.push("chart-stress-cal");')
 parts.append('}')
-_mfd_charts = {"funding": fred_mod["funding"]["charts"],
-               "fedbs": fred_mod["fedbs"]["charts"] + ([fred_mod["fedbs"]["comp_chart"]] if fred_mod["fedbs"].get("comp_chart") else []),
-               "credit": fred_mod["credit"]["charts"], "rates": fred_mod["rates"]["charts"]}
+_mfd_charts = {"funding": fred_mod["funding"]["charts"] + fred_mod["funding"]["card_charts"],
+               "fedbs": fred_mod["fedbs"]["charts"] + ([fred_mod["fedbs"]["comp_chart"]] if fred_mod["fedbs"].get("comp_chart") else []) + fred_mod["fedbs"]["card_charts"],
+               "credit": fred_mod["credit"]["charts"] + fred_mod["credit"]["card_charts"],
+               "rates": fred_mod["rates"]["charts"] + fred_mod["rates"]["card_charts"]}
 parts.append(fred_render.js_for(_mfd_charts))
 parts.append('window.addEventListener("resize",function(){')
 parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-hgex-spy"].concat(sfrIds).concat(cotChartIds).concat(sparkIds).concat(clkIds).concat(tailIds).concat(scIds).forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
@@ -3140,7 +3150,7 @@ ordered = (
     + _fund_body + [layout_render.sec_close()]
     + [layout_render.sec_open("sec-fedbs", "Fed balance sheet &amp; RMP", "美联储资产负债表与储备管理购债", "closed", layout_render.state_badge("context"))]
     + B("fedbs") + [layout_render.sec_close()]
-    + [layout_render.sec_open("sec-credit", "Credit", "信用", "open", layout_render.state_badge(fred_mod["credit"]["state"]))]
+    + [layout_render.sec_open("sec-credit", "Credit", "信用", "closed", layout_render.state_badge(fred_mod["credit"]["state"]))]
     + B("credit") + [layout_render.sec_close()]
     + [layout_render.sec_open("sec-rates", "Rates &amp; term premium", "利率与期限溢价", "closed", layout_render.state_badge(fred_mod["rates"]["state"]))]
     + B("rates") + [layout_render.sec_close()]

@@ -554,9 +554,185 @@ def build_rates(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
             "dgs30": d30c["value"] if d30c else "n/a", "tp": tpc["value"] if tpc else "n/a"}
 
 
-def build_all(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
-    return {"funding": build_funding(S, now), "fedbs": build_fedbs(S, now),
-            "credit": build_credit(S, now), "rates": build_rates(S, now)}
+def build_all(S: dict[str, pd.Series], now: datetime, charts: bool = True) -> dict[str, Any]:
+    M = {"funding": build_funding(S, now), "fedbs": build_fedbs(S, now),
+         "credit": build_credit(S, now), "rates": build_rates(S, now)}
+    if charts:
+        attach_card_charts(M, S)
+    return M
+
+
+# ---------------------------------------------------------------------------
+# Per-card charts: every metric card carries its own time series so the number has context
+# ---------------------------------------------------------------------------
+CARD_LINE = {"normal": "#10b981", "watch": "#f59e0b", "elevated": "#f97316", "stress": "#ef4444",
+             "context": "#a5b4fc", "na": "#64748b"}
+REF_GREY, REF_AMBER, REF_RED = "#64748b", "#f59e0b", "#ef4444"
+
+
+def _thin(s: pd.Series, recent_days: int = 220, how: str = "last") -> pd.Series:
+    """Keep the last recent_days at native frequency; thin older daily data to weekly."""
+    s = s.dropna()
+    if len(s) < 3:
+        return s
+    spacing = pd.Series(s.index[-60:]).diff().dt.days.median()
+    if not (spacing == spacing) or spacing >= 5:
+        return s
+    cut = s.index[-1] - pd.Timedelta(days=recent_days)
+    old, new = s[s.index < cut], s[s.index >= cut]
+    if len(old):
+        r = old.resample("W-FRI")
+        old = (r.max() if how == "max" else r.last()).dropna()
+    return pd.concat([old, new])
+
+
+def _window(s: pd.Series, years: int) -> pd.Series:
+    s = s.dropna()
+    return s[s.index >= s.index[-1] - pd.DateOffset(years=years)] if len(s) else s
+
+
+def _tr(name: str, color: str, s: pd.Series, kind: str = "scatter", digits: int = 2, how: str = "last") -> dict[str, Any]:
+    t = _thin(s, how=how)
+    return dict(name=name, color=color, type=kind, x=[d.strftime("%Y-%m-%d") for d in t.index],
+                y=[round(float(v), digits) for v in t.values])
+
+
+def _pct_refs(s: pd.Series, years: int | None, label: str = "") -> list[dict[str, Any]]:
+    w = s.dropna()
+    if years:
+        w = _window(w, years)
+    if len(w) < 30:
+        return []
+    return [{"y": round(float(w.quantile(0.80)), 2), "label": "80th pctile " + label, "color": REF_AMBER},
+            {"y": round(float(w.quantile(0.95)), 2), "label": "95th pctile " + label, "color": REF_RED}]
+
+
+def _card_chart_spec(cid: str, S: dict[str, pd.Series], card: dict[str, Any]) -> dict[str, Any] | None:
+    """Return {series list, unit, refs, years, vlines} for a card id, or None."""
+    st = card["state"]
+    col = CARD_LINE.get(st, CARD_LINE["context"])
+    d = lambda sid: _disp(S, sid)  # noqa: E731
+    if cid == "tgcr-iorb":
+        tg, io = _get(S, "TGCRRATE"), _get(S, "IORB")
+        if tg is None or io is None:
+            return None
+        sp = mon.spread(tg, io, 100.0)
+        return dict(traces=[_tr("TGCR minus IORB", col, _window(sp, 3), digits=1)], unit="bp",
+                    refs=[{"y": 0, "label": "IORB", "color": REF_GREY}, {"y": 3, "label": "+3 bp strategy line", "color": REF_AMBER},
+                          {"y": 5, "label": "+5 bp", "color": REF_RED}])
+    if cid == "sofr-disp":
+        a, b = _get(S, "SOFR99"), _get(S, "SOFR")
+        if a is None or b is None:
+            return None
+        sp = mon.spread(a, b, 100.0)
+        return dict(traces=[_tr("99th minus median", col, _window(sp, 3), digits=1)], unit="bp", refs=_pct_refs(sp, 2, "(2y)"))
+    if cid == "sofr-vol":
+        sv = _get(S, "SOFRVOL")
+        if sv is None:
+            return None
+        w = _window(sv, 3)
+        return dict(traces=[_tr("Daily", "#475569", w, digits=0), _tr("20d average", "#f59e0b", w.rolling(20).mean(), digits=0)], unit="$B", refs=[])
+    if cid in ("srf", "swaps", "fima", "dw", "frrp"):
+        sid = {"srf": "RPONTSYD", "swaps": "SWPT", "fima": "H41RESPPALGTRFNWW", "dw": "WLCFLPCL", "frrp": "WLRRAFOIAL"}[cid]
+        ser = d(sid)
+        if ser is None:
+            return None
+        if cid == "srf":
+            ser = ser.dropna().rolling("7D").sum()
+        w = _window(ser, 3)
+        refs = []
+        if cid in ("srf", "swaps", "fima"):
+            fl = mon.BACKSTOP_FLOORS_B[sid]
+            refs.append({"y": fl, "label": "floor ${:g}B".format(fl), "color": REF_AMBER})
+        if cid in ("srf", "swaps", "fima", "dw"):
+            p95 = mon.trailing_p95(ser, 156)
+            if p95 == p95:
+                refs.append({"y": round(p95, 2), "label": "3y 95th pctile", "color": REF_RED})
+        bar = cid in ("srf", "fima", "swaps")
+        return dict(traces=[_tr("7-day total" if cid == "srf" else card["title"].split(" · ")[0], col, w,
+                                "bar" if bar else "scatter", digits=2, how="max")], unit="$B", refs=refs)
+    # level cards from the catalog
+    LEVEL = {"wshobl": "WSHOBL", "wshosho": "WSHOSHO", "wsefintl1": "WSEFINTL1", "walcl": "WALCL", "wresbal": "WRESBAL",
+             "wtregen": "WTREGEN", "em-oas": "BAMLEMCBPIOAS", "nfci": "NFCI", "anfci": "ANFCI", "stlfsi": "STLFSI4",
+             "oas-hy": "BAMLH0A0HYM2", "oas-ig": "BAMLC0A0CM", "oas-bbb": "BAMLC0A4CBBB", "oas-bb": "BAMLH0A1HYBB",
+             "oas-b": "BAMLH0A2HYB", "oas-ccc": "BAMLH0A3HYC", "dgs30": "DGS30", "dgs10": "DGS10", "dfii10": "DFII10",
+             "tp10": "THREEFYTP10", "t10y2y": "T10Y2Y", "t10y3m": "T10Y3M", "t10yie": "T10YIE", "usd": "DTWEXBGS"}
+    if cid in LEVEL:
+        sid = LEVEL[cid]
+        ser = d(sid)
+        if ser is None:
+            return None
+        spec = _spec(sid)
+        years = 5 if cid in ("dgs30", "dgs10", "dfii10", "tp10", "t10y2y", "t10y3m", "t10yie", "usd") else 3
+        refs: list[dict[str, Any]] = []
+        vl = None
+        if cid.startswith("oas-"):
+            refs = _pct_refs(ser, 3, "(3y)")
+        elif cid in ("dgs30", "dgs10", "dfii10", "tp10"):
+            refs = _pct_refs(ser, None, "(since 2010)")
+        elif cid in ("nfci", "anfci", "stlfsi"):
+            refs = [{"y": 0, "label": "0 = historical average", "color": REF_GREY}, {"y": 1.0, "label": "1.0 tight", "color": REF_AMBER}]
+        elif cid in ("t10y2y", "t10y3m"):
+            refs = [{"y": 0, "label": "0 = inverted below", "color": REF_GREY}]
+        elif cid == "wshobl":
+            vl = [{"x": RMP_START, "label": "RMP start"}]
+        unit = spec.display
+        return dict(traces=[_tr(card["title"].split(" · ")[0], col, _window(ser, years), digits=2 if unit in ("pct", "$T", "index") else 1)],
+                    unit=unit, refs=refs, vlines=vl)
+    if cid == "ccc-bb":
+        a, b = d("BAMLH0A3HYC"), d("BAMLH0A1HYBB")
+        if a is None or b is None:
+            return None
+        q = mon.spread(a, b, 1.0) / 100.0
+        return dict(traces=[_tr("CCC minus BB", col, _window(q, 3), digits=2)], unit="pp", refs=_pct_refs(q, 3, "(3y)"))
+    if cid == "cp-tbill":
+        a, b = _get(S, "DCPF3M"), _get(S, "DTB3")
+        if a is None or b is None:
+            return None
+        sp = mon.spread(a, b, 100.0)
+        return dict(traces=[_tr("CP minus T-bill", col, _window(sp, 3), digits=0)], unit="bp", refs=[{"y": 0, "label": "0", "color": REF_GREY}])
+    if cid == "s5s30":
+        a, b = _get(S, "DGS30"), _get(S, "DGS5")
+        if a is None or b is None:
+            return None
+        sp = mon.spread(a, b, 100.0)
+        return dict(traces=[_tr("30Y minus 5Y", col, _window(sp, 5), digits=0)], unit="bp", refs=[{"y": 0, "label": "0", "color": REF_GREY}])
+    if cid == "bankts":
+        bank = _get(S, "TASACBW027SBOG")
+        if bank is None:
+            return None
+        return dict(traces=[_tr("Bank holdings", col, _window(bank / 1000.0, 5), digits=2)], unit="$T", refs=[])
+    return None
+
+
+def attach_card_charts(M: dict[str, Any], S: dict[str, pd.Series]) -> None:
+    """Give every non-stale card a chart payload (id mcc-<card id>) and collect them per section."""
+    for sec in ("funding", "fedbs", "credit", "rates"):
+        sec_charts = []
+        for key in ("cards", "backstops", "ladder"):
+            for c in M[sec].get(key, []):
+                c["chart_id"] = None
+                if c.get("stale") or c.get("state") == "na":
+                    continue
+                try:
+                    spec = _card_chart_spec(c["id"], S, c)
+                except Exception:  # noqa: BLE001
+                    spec = None
+                if not spec or not spec["traces"] or not spec["traces"][0]["x"]:
+                    continue
+                cid = "mcc-" + c["id"]
+                chart = {"id": cid, "unit": spec["unit"], "traces": spec["traces"], "refs": spec.get("refs", []),
+                         "default_range": "1Y", "mini": True}
+                if spec.get("vlines"):
+                    chart["vlines"] = spec["vlines"]
+                c["chart_id"] = cid
+                sec_charts.append(chart)
+        M[sec]["card_charts"] = sec_charts
+        have = {c["id"] for c in sec_charts}
+        if "mcc-wshobl" in have:
+            M[sec]["charts"] = [c for c in M[sec].get("charts", []) if c["id"] != "chart-rmp-level"]
+        if "mcc-s5s30" in have:
+            M[sec]["charts"] = [c for c in M[sec].get("charts", []) if c["id"] != "chart-rates-5s30s"]
 
 
 # ---------------------------------------------------------------------------
