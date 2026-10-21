@@ -34,6 +34,8 @@ import fred_catalog
 import fred_modules
 import fred_monitor
 import fred_render
+import layout_render
+import dash_state
 import health
 
 print("Starting dashboard generation...")
@@ -2100,7 +2102,27 @@ def build_takeaway():
     else:
         sents.append("Fragility: LPI data unavailable this run.")
 
-    # 2 — Crowding
+    # 2 — Funding
+    _fm = fred_mod["funding"]
+    f_bits = ["resonance {} ({})".format(fp_summary, fp_headline.lower() if fp_headline else "n/a")]
+    f_bits.append("backstops in use {}/{} (SRF, swaps, FIMA repo); discount window {}".format(
+        _fm["backstops_in_use"], _fm["backstops_avail"], _fm.get("dw_state", "unavailable").replace("_", " ")))
+    sents.append("Funding: " + "; ".join(f_bits) + ".")
+
+    # 3 — Credit and rates
+    _cm, _rm = fred_mod["credit"], fred_mod["rates"]
+    if _cm["state"] == "na":
+        c_txt = "credit spreads unavailable or stale"
+    else:
+        c_txt = "HY OAS {}, CCC minus BB {} ({}) with the worst credit state at {}".format(
+            _cm["hy_value"], _cm["ccc_bb"], _cm["ccc_bb_sub"].split(" · ")[0], _cm["state"])
+    if _rm["state"] == "na":
+        r_txt = "rates unavailable or stale"
+    else:
+        r_txt = "30Y {} and 10Y term premium {} ({})".format(_rm["dgs30"], _rm["tp"], _rm["state"])
+    sents.append("Credit and rates: " + c_txt + "; " + r_txt + ".")
+
+    # 4 — Crowding and amplifiers (one bullet; the two clauses are kept as written)
     bits2 = []
     if basis_has:
         bits2.append("basis-trade proxy {:.0f} ({})".format(basis_proxy, basis_msg[0].lower() + basis_msg[1:]))
@@ -2111,8 +2133,7 @@ def build_takeaway():
         pv = m.get("pct", float("nan"))
         bits2.append("most-extreme equity positioning {} at {} pctile (z {})".format(
             m["label"], "{:.0f}th".format(pv) if pv == pv else "n/a", ztxt))
-    sents.append(("Crowding: " + "; ".join(bits2) + ".") if bits2
-                 else "Crowding: positioning data unavailable this run.")
+    crowd_txt = ("Crowding: " + "; ".join(bits2) + ".") if bits2 else "Crowding: positioning data unavailable this run."
 
     # 3 — Amplifiers
     bits3 = []
@@ -2137,7 +2158,7 @@ def build_takeaway():
                  else ("mixed" if (btc_pos or eth_pos) else "negative or zero"))) if fun_any
                  else "crypto funding unavailable")
     bits3.append("{} de-lever conditions met".format(delever["text"]))
-    sents.append("Amplifiers: " + "; ".join(bits3) + ".")
+    sents.append(crowd_txt + " Amplifiers: " + "; ".join(bits3) + ".")
 
     gsign = ("positive" if dg_positive else "negative") if dg_has else None
     st_en, st_cn, st_col = takeaway_stance(
@@ -2148,6 +2169,92 @@ def build_takeaway():
 
 tk_sents, tk_stance_en, tk_stance_cn, tk_stance_col = build_takeaway()
 print("Key Takeaway stance:", tk_stance_en, "|", tk_stance_cn)
+
+# ---------------------------------------------------------------------------
+# v2 overview: scorecard tiles, what-changed and the embedded daily state
+# ---------------------------------------------------------------------------
+def _lpi_global_state():
+    if not lpi_has or lpi_stale:
+        return "na"
+    return "normal" if lpi_composite < 40 else ("watch" if lpi_composite < 60 else ("elevated" if lpi_composite < 80 else "stress"))
+
+
+def _basis_global_state():
+    if not basis_has:
+        return "na"
+    return "normal" if basis_proxy < 40 else ("watch" if basis_proxy < 80 else ("elevated" if basis_proxy < 95 else "stress"))
+
+
+_fp_map = {"normal": "normal", "watch": "watch", "warning": "elevated", "structural-top-risk": "stress"}
+_fm = fred_mod["funding"]
+_fund_state = _fp_map.get(fp_state, "na")
+if _fund_state != "na" and _fm["backstops_in_use"] >= 1:
+    _fund_state = fred_monitor.worst([_fund_state, "elevated"])
+_cot_extreme = sum(1 for _m in cot_markets.values() if _m.get("pct") == _m.get("pct") and (_m["pct"] >= 90 or _m["pct"] <= 10))
+_amp_state = "na" if sig_eval == 0 else ("elevated" if sig_count <= 1 else ("watch" if sig_count == 2 else "normal"))
+if dg_has and not dg_positive:
+    _amp_state = fred_monitor.worst([_amp_state, "elevated"]) if _amp_state != "na" else "elevated"
+
+_sofr_f = (sofr_spread.get("filtered_bp") or [])[-20:]
+_lpi_spark = [round(float(v), 1) for v in lpi_series_full.tail(13).values] if lpi_has else []
+_credit_m, _rates_m = fred_mod["credit"], fred_mod["rates"]
+score_tiles = [
+    {"id": "lpi", "title": "Fragility 脆弱度 · LPI", "value": s_lpi if lpi_has else "N/A", "state": _lpi_global_state(),
+     "sub": ("{} · {} · as of {}".format(reg_level, reg_dir, lpi_asof_txt) if lpi_has else "insufficient data")
+            + (" · stale" if (lpi_has and lpi_stale) else ""), "spark": _lpi_spark, "target": "sec-lpi"},
+    {"id": "funding", "title": "Funding 资金面", "value": "{}/3".format(fp_count) if fp_state != "unavailable" else "N/A",
+     "state": _fund_state, "sub": "resonance · backstops in use {}/{} · discount window {}".format(
+         _fm["backstops_in_use"], _fm["backstops_avail"], _fm.get("dw_state", "unavailable").replace("_", " ")),
+     "spark": [float(v) for v in _sofr_f if v == v], "target": "sec-funding"},
+    {"id": "credit", "title": "Credit 信用 · HY OAS", "value": _credit_m["hy_value"], "state": _credit_m["state"],
+     "sub": "CCC minus BB {} · {}".format(_credit_m["ccc_bb"], _credit_m["ccc_bb_sub"].split(" · ")[0]),
+     "spark": (_credit_m["ladder"][0]["spark"] if _credit_m["ladder"] else []), "target": "sec-credit"},
+    {"id": "rates", "title": "Rates 利率 · 30Y", "value": _rates_m["dgs30"], "state": _rates_m["state"],
+     "sub": "10Y term premium {}".format(_rates_m["tp"]),
+     "spark": (next((c["spark"] for c in _rates_m["cards"] if c["id"] == "dgs30"), [])), "target": "sec-rates"},
+    {"id": "crowding", "title": "Crowding 拥挤度 · Basis proxy", "value": s_basis if basis_has else "N/A", "state": _basis_global_state(),
+     "sub": "COT extremes (>=90th or <=10th pctile): {}".format(_cot_extreme), "spark": [], "target": "sec-crowding"},
+    {"id": "amplifiers", "title": "Amplifiers 放大器", "value": "{}/{}".format(sig_count, sig_eval) if sig_eval else "N/A",
+     "state": _amp_state, "sub": "de-lever conditions met · dealer gamma " + (("positive" if dg_positive else "negative") if dg_has else "n/a"),
+     "spark": [], "target": "sec-amplifiers"},
+]
+
+_today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+_dash_days = dash_state.load(_prev_html)
+_snapshot = {t["id"]: {"s": t["state"], "t": t["value"], "label": t["title"].split(" · ")[0]} for t in score_tiles}
+_snap_base, _snap_changes = dash_state.compare(_dash_days, _today_iso, _snapshot)
+_dash_days = dash_state.update(_dash_days, _today_iso, _snapshot)
+
+_wk_cut = pd.Timestamp(datetime.now(timezone.utc).date()) - pd.Timedelta(days=7)
+try:
+    _fred_prev = fred_modules.build_all(fred_modules.truncate(fred_series, _wk_cut), fm.utc_now() - pd.Timedelta(days=7))
+    _state_chg = fred_modules.state_changes(fred_mod, _fred_prev)
+except Exception as _exc:  # noqa: BLE001
+    print("what-changed state comparison failed:", _exc)
+    _state_chg = []
+try:
+    _moves = fred_modules.weekly_moves(fred_series, fm.utc_now())
+except Exception as _exc:  # noqa: BLE001
+    print("what-changed moves failed:", _exc)
+    _moves = []
+
+wc_items = []
+if lpi_has and len(lpi_series_full) >= 2 and not lpi_stale:
+    _l0, _l1 = float(lpi_series_full.iloc[-2]), float(lpi_series_full.iloc[-1])
+    wc_items.append("LPI {:.1f} versus {:.1f} the prior week ({:+.1f} points), regime {} and {}.".format(_l1, _l0, _l1 - _l0, reg_level, reg_dir.lower()))
+for _c in _state_chg[:6]:
+    wc_items.append('<span class="{}">{}</span> moved from {} to {} (now {}).'.format(
+        "up" if _c["worse"] else "down", _c["title"], _c["from"], _c["to"], _c["value"]))
+for _c in _snap_changes:
+    wc_items.append("Scorecard {} moved from {} ({}) to {} ({}).".format(_c["label"], _c["from"], _c["prev"], _c["to"], _c["now"]))
+for _c in _moves:
+    wc_items.append(_c["text"] + ".")
+wc_items = wc_items[:8]
+if _snap_base:
+    wc_note = "Indicator states compare with 7 days earlier, rebuilt from each series' own history. Scorecard states compare with the stored snapshot of " + _snap_base + "."
+else:
+    wc_note = "Indicator states compare with 7 days earlier, rebuilt from each series' own history. Scorecard comparison is building history: {} daily snapshot(s) stored, one that is 5 to 10 days old is needed.".format(len(_dash_days))
+overview_html = layout_render.scorecard_html(score_tiles) + layout_render.changes_html(wc_items, wc_note)
 
 # Decision-table demonstration (forced combos) + degraded-mode check for logs
 for _combo in [("Low", "Falling", 40.0, "positive", 35.0),
@@ -2372,35 +2479,43 @@ parts.append('.chart-subtitle{font-size:12px;color:#7c8aa0;margin:3px 0 10px;lin
 parts.append('.bottom-bar{background:#0a0c10;border-top:1px solid #1e2433;padding:10px 20px;display:flex;flex-wrap:wrap;gap:16px}')
 parts.append('.bottom-item{font-size:12px;color:#7c8aa0}.bottom-item span{color:#94a3b8}')
 parts.append(fred_render.CSS)
+parts.append(layout_render.CSS)
+parts.append('.sig-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 12px}.sig-unit{display:flex;flex-direction:column;gap:12px;min-width:0}.sig-unit.wide{grid-column:1 / -1}')
+parts.append('.sig-unit .signal-card{margin:0}.sig-unit .chart-card{margin:0}.sig-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}')
+parts.append('@media(max-width:900px){.sig-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.sig-grid,.sig-pair{grid-template-columns:minmax(0,1fr)}}')
+parts.append('.layer-header{margin-top:22px}')
 parts.append('</style></head><body>')
 
+# ---- page assembly: blocks are collected separately and joined in layout order ----
+pre_parts = parts
+BLOCKS = {}
+
+
+def _blk(name):
+    global parts
+    parts = BLOCKS.setdefault(name, [])
+
+
 # header
+_blk("header")
 parts.append('<div class="header"><div class="header-left">')
 parts.append('<h1>Market Fragility Dashboard <span>/ NDX</span></h1>')
-parts.append('<p>3-layer risk stack: fragility · crowding · amplifiers &middot; auto-updated every hour</p></div>')
-parts.append('<div class="header-right"><div class="timestamp">Last updated: ' + now_str + '</div></div></div>')
+parts.append('<p>4-layer risk stack: fragility · conditions · crowding · amplifiers &middot; scheduled hourly via GitHub Actions, actual cadence may lag</p></div>')
+parts.append('<div class="header-right"><div class="timestamp">Last updated: ' + now_str + '</div>@@HEALTH_CHIP@@</div></div>')
+parts.append(layout_render.nav_html([("overview", "Overview"), ("sec-lpi", "LPI"), ("sec-funding", "Funding"), ("sec-fedbs", "Fed balance sheet"),
+                                     ("sec-credit", "Credit"), ("sec-rates", "Rates"), ("sec-crowding", "Crowding"),
+                                     ("sec-amplifiers", "Amplifiers"), ("sec-calendar", "Calendar"), ("sec-methods", "Methods")]))
 
-# summary strip
-parts.append('<div class="summary-strip">')
-parts.append('<div class="summary-cell"><div class="lbl">Fragility · LPI + Regime</div>'
-             + '<div class="val" style="color:' + lpi_col + '">' + strip_lpi + '</div>'
-             + '<div class="sub">' + (reg_msg if lpi_has else "insufficient data") + '</div></div>')
-parts.append('<div class="summary-cell"><div class="lbl">Crowding · Basis-Trade Proxy</div>'
-             + '<div class="val" style="color:' + basis_col + '">' + s_basis + '</div>'
-             + '<div class="sub">' + basis_msg + '</div></div>')
-parts.append('<div class="summary-cell"><div class="lbl">Amplifiers · Signals Confirmed</div>'
-             + '<div class="val" style="color:' + ccol + '">' + str(sig_count) + '/' + str(sig_eval) + '</div>'
-             + '<div class="sub">' + cmsg + '</div></div>')
-parts.append('</div>')
-
-# Key Takeaway card (below summary strip, above Layer 1)
+# overview: scorecard, what changed, key takeaway
+_blk("overview")
+parts.append(overview_html)
 parts.append('<div class="takeaway">')
 parts.append('<div class="takeaway-title">关键结论 Key Takeaway <span>rule-based · sizing &amp; hedging only</span></div>')
 parts.append('<div class="takeaway-ts">generated ' + now_str + ' &middot; deterministic (no forecast)</div>')
-parts.append('<div class="takeaway-body">')
+parts.append('<div class="takeaway-body"><ol>')
 for _s in tk_sents:
-    parts.append('<div>' + _s + '</div>')
-parts.append('</div>')
+    parts.append('<li>' + _s + '</li>')
+parts.append('</ol></div>')
 parts.append('<div class="takeaway-stance" style="background:' + tk_stance_col
              + '22;border-left:4px solid ' + tk_stance_col + ';color:' + tk_stance_col + '">'
              + 'Stance: ' + tk_stance_en
@@ -2408,20 +2523,21 @@ parts.append('<div class="takeaway-stance" style="background:' + tk_stance_col
 parts.append('</div>')
 
 # ===================== LAYER 1 — FRAGILITY =====================
+_blk("l1_hdr")
 parts.append('<div class="layer-header">第一层 · 脆弱度 Fragility <span>Liquidity Pressure Index</span>'
              + '<span class="tf">weeks–months</span></div>')
 
-parts.append('<div class="lpi-section">')
-
+_blk("fastcards")
 # Fast funding/liquidity variables are deliberately compact and sit beneath the
 # layer heading rather than in the top-level summary strip.
-parts.append('<div class="lpi-heading">Fast funding &amp; liquidity <span>public-data confirmation modules</span></div>')
+parts.append('<div class="lpi-heading">Supplementary confirmation 补充确认 <span>NY Fed repo, reserves to GDP, SOFR tail</span></div>')
 parts.append('<div class="fast-grid">'
              + _fast_card('Reserves / GDP', res_value, res_sub, reserves, res_status, res_details)
              + _fast_card('NY Fed repo accepted · 7d', repo_value, repo_sub, repo, repo_status, repo_details)
              + _fast_card('SOFR p99 − median', tail_value, 'Tail-rate pressure; use with persistent spread and repo use.', sofr_tail, 'normal', tail_details)
              + '</div>')
 
+_blk("funding")
 # --- Dollar Funding Pressure section (absorbs the standalone SOFR-IORB panel) ---
 parts.append('<div class="sofr-panel fp-panel ' + fp_cls + '" id="funding-pressure">')
 parts.append('<div class="lpi-heading">Dollar Funding Pressure <span>\u7f8e\u5143\u8d44\u91d1\u538b\u529b '
@@ -2489,6 +2605,7 @@ parts.append(fred_render.backstops_html(fred_mod["funding"]))
 parts.append(fred_render.funding_extras_html(fred_mod["funding"]))
 parts.append(fp_details + '</div>')
 
+_blk("lpi_gauge")
 # gauge card with regime badge
 parts.append('<div class="lpi-gauge ' + reg_cls + '">')
 parts.append('<div class="lpi-gauge-top">')
@@ -2526,15 +2643,15 @@ parts.append('<div class="regime-box"><div class="rb-title">Regime Clock &middot
              + '<div id="chart-regime-clock" class="regime-clock"></div></div>')
 parts.append('</div>')
 
+_blk("lpi_factors")
 # sub-factor bars (with 4w direction arrows)
 parts.append('<div class="lpi-factors">' + lpi_bars + '</div>')
 
 # conditional tail table
+_blk("tail")
 if tail_ok:
     parts.append('<div class="tail-wrap">')
     parts.append('<div class="tail-title">Conditional Tail Table &mdash; forward S&amp;P 500 by LPI band</div>')
-    if tail_readout:
-        parts.append('<div class="tail-readout">' + tail_readout + '</div>')
     parts.append('<table class="tail"><thead><tr>'
                  + '<th>LPI band</th><th>Horizon</th><th>N</th><th>Mean ret</th><th>Median</th>'
                  + '<th>Fwd vol (ann.)</th><th>P(MaxDD&gt;5%)</th><th>P(MaxDD&gt;10%)</th><th>Avg MaxDD</th>'
@@ -2556,6 +2673,7 @@ else:
     parts.append('<div class="tail-wrap"><div class="tail-title">Conditional Tail Table</div>'
                  '<div style="color:#94a3b8;font-size:12px">Unavailable (S&amp;P 500 or LPI history missing).</div></div>')
 
+_blk("lpi_charts")
 # LPI history charts (52w + full reconstructed)
 parts.append('<div class="charts-grid" style="padding:0 0 12px">')
 parts.append('<div class="chart-card"><div class="chart-title">LPI &mdash; Trailing 52 Weeks</div>')
@@ -2567,6 +2685,7 @@ parts.append('<div class="chart-subtitle">' + str(recon_n) + ' weeks from ' + re
 parts.append('<div id="chart-lpi-full"></div></div>')
 parts.append('</div>')
 
+_blk("calendar")
 # stress calendar — timeline + text legend
 parts.append('<div class="chart-card" style="margin:0 0 10px">'
              + '<div class="chart-title">2026 H2 Stress Calendar &middot; 压力日历</div>'
@@ -2580,35 +2699,52 @@ parts.append('<span class="hot">Aug (3rd):</span> refunding settlement peak mid-
 parts.append('<span class="cool">Jul:</span> lowest pressure month of H2')
 parts.append('</div>')
 
-parts.append('</div>')  # lpi-section
 
-# v2 modules (interim placement; reorganized in the layout phase)
+_blk("fedbs")
 parts.append(fred_render.fedbs_html(fred_mod["fedbs"]))
+_blk("credit")
 parts.append(fred_render.credit_html(fred_mod["credit"]))
+_blk("rates")
 parts.append(fred_render.rates_html(fred_mod["rates"]))
 
-# ===================== LAYER 2 — CROWDING =====================
-parts.append('<div class="layer-header">第二层 · 拥挤度 Crowding <span>CFTC COT positioning</span>'
+# ===================== CROWDING =====================
+_blk("l2_hdr")
+parts.append('<div class="layer-header">第二层 · 资金、信用与利率条件 Conditions <span>funding · Fed balance sheet · credit · rates</span>'
+             + '<span class="tf">days–weeks</span></div>')
+_blk("l3_hdr")
+parts.append('<div class="layer-header">第三层 · 拥挤度 Crowding <span>concentration · AI leadership · CFTC COT positioning</span>'
              + '<span class="tf">weeks</span></div>')
-parts.append('<div class="cot-section">')
+_blk("conc")
 parts.append('<div class="fast-grid">' + _fast_card('S&amp;P 500 concentration', conc_value, conc_sub, conc,
              conc.get('status', 'normal'), conc_details) + '</div>')
+_blk("cot")
 parts.append('<div class="' + fresh_cls + '">COT ' + fresh_txt + '</div>')
 
 if cot_ok:
+    _heat_rows = []
+    for _grp, _lst in (("Equity index · Leveraged Funds net", EQUITY_MARKETS), ("Treasury notes · Leveraged Funds net", RATES_MARKETS),
+                       ("Context · Managed Money / leveraged net", cot_ctx_list)):
+        for _k, *_rest in _lst:
+            _m = cot_markets.get(_k)
+            if not _m:
+                continue
+            _heat_rows.append({"group": _grp, "label": _m["label"], "net": "{:+,}".format(int(_m["net"])), "pct": _m.get("pct", float("nan")),
+                               "z": ("{:+.1f}".format(_m["z"]) if _m.get("z") == _m.get("z") else "n/a"),
+                               "chg4": ("{:+,}".format(int(_m["chg4"])) if _m.get("chg4") == _m.get("chg4") else "n/a")})
+    parts.append(layout_render.heat_strip_html(_heat_rows))
+    _panes = []
     if cot_equity_html:
-        parts.append('<div class="cot-grouplbl">Equity index &middot; Leveraged Funds net</div>')
-        parts.append('<div class="cot-cards">' + cot_equity_html + '</div>')
+        _panes.append(("Equity index", '<div class="cot-grouplbl">Equity index &middot; Leveraged Funds net</div><div class="cot-cards">' + cot_equity_html + '</div>'))
     if cot_rates_html:
-        parts.append('<div class="cot-grouplbl">Treasury notes &middot; Leveraged Funds net (basis-trade legs)</div>')
-        parts.append('<div class="cot-cards">' + cot_rates_html + '</div>')
+        _panes.append(("Treasury notes", '<div class="cot-grouplbl">Treasury notes &middot; Leveraged Funds net (basis-trade legs)</div><div class="cot-cards">' + cot_rates_html + '</div>'))
     if cot_ctx_html:
-        parts.append('<div class="cot-grouplbl">Context &middot; Managed Money / lev net</div>')
-        parts.append('<div class="cot-cards">' + cot_ctx_html + '</div>')
+        _panes.append(("Context", '<div class="cot-grouplbl">Context &middot; Managed Money / lev net</div><div class="cot-cards">' + cot_ctx_html + '</div>'))
+    parts.append(layout_render.tabs_html("cot", _panes, 0))
 else:
     parts.append('<div class="gex-note-box">COT data unavailable this run (CFTC outage) '
                  '&mdash; crowding layer degraded, other layers unaffected.</div>')
 
+_blk("basis")
 # basis-trade proxy gauge
 parts.append('<div class="lpi-gauge" style="border-left:3px solid ' + basis_col + '">')
 parts.append('<div class="lpi-gauge-top">')
@@ -2623,44 +2759,60 @@ parts.append('<div class="tail-foot">Proxy = mean over 2y/5y/10y of [pctile(Asse
              'measuring how extreme the AM-long / LF-short configuration is vs its own history. Not added to the 4-factor LPI '
              'composite (a 5-factor variant is a future option).</div>')
 parts.append('</div>')
-parts.append('</div>')  # cot-section
 
-# ===================== LAYER 3 — AMPLIFIERS & TRIGGERS =====================
-parts.append('<div class="layer-header">第三层 · 放大器与触发器 Amplifiers &amp; Triggers '
+# ===================== AMPLIFIERS & TRIGGERS =====================
+_blk("ai")
+parts.append('<div class="gex-heading" style="margin-top:12px">AI leadership &amp; semiconductor relative strength <span>fast variables · fixed basket</span></div>')
+parts.append('<div class="fast-grid">' + _fast_card('AI basket breadth', ai_value, ai_sub, ai, 'normal', ai_details) + rs_cards + '</div>')
+
+_blk("l4_hdr")
+parts.append('<div class="layer-header">第四层 · 放大器与触发器 Amplifiers &amp; Triggers '
              + '<span>de-lever bottom signals + dealer gamma</span><span class="tf">hours–days</span></div>')
-
-parts.append('<div class="gex-section"><div class="gex-heading">Credit transmission &amp; AI leadership <span>fast variables · fixed basket</span></div>')
-parts.append('<div class="fast-grid">' + oas_cards + _fast_card('AI basket breadth', ai_value, ai_sub, ai, 'normal', ai_details) + rs_cards + '</div>')
-parts.append('</div>')
+_blk("signals")
 
 # signal bar
-parts.append('<div class="signal-bar">')
+parts.append('<div class="sig-grid">')
+parts.append('<div class="sig-unit wide">')
 parts.append('<div class="signal-card ' + cls_vix + '">')
 parts.append('<div class="signal-label">&#9312; VIX Term Structure · Cboe official</div>')
 parts.append('<div class="signal-value ' + cls_vix + '">' + s_vdiff + ' pts</div>')
 parts.append('<div class="signal-sub">' + ('VIX9D ' + s_v9d + ' &rarr; ' if vix_has_9d else '') + 'VIX ' + s_vix + ' &rarr; VIX3M ' + s_v3m + ('' if vix_has_9d or not vix_available else ' (VIX9D unavailable; source ' + str(vix_data.get("source", "")) + ')') + '</div>')
 parts.append('<div class="signal-badge ' + bdg_vix + '">' + txt_vix + '</div><div class="fast-stamp">' + _fast_stamp(vix_data)
-             + '</div><details class="metric-details"><summary>About VIX term structure</summary><div><b>Definition:</b> Cboe official VIX9D, VIX, and VIX3M closes. The curve is used only when all three latest observations share the same date.<br><b>Why it matters:</b> Backwardation can accompany acute volatility demand.<br><b>How to read:</b> Contango is VIX3M above spot; a date mismatch or stale series is unavailable, never ratioed.<br><b>Source:</b> <a href="' + FAST_SOURCES["vix"] + '" target="_blank" rel="noopener">Cboe daily index history</a><br><b>Cadence:</b> daily business day · <b>Observation:</b> ' + (_fast_fresh(vix_data).get("observation_date") or "unavailable") + ' · <b>Fetched:</b> ' + (_fast_fresh(vix_data).get("fetched_at") or now_str) + '<br><b>Limitations:</b> a curve shape is a volatility-market condition, not a directional forecast.</div></details></div>')
+             + '</div><details class="metric-details"><summary>About VIX term structure</summary><div><b>Definition:</b> Cboe official VIX, VIX3M and (optional) VIX9D closes, with FRED VIXCLS and VXVCLS as a fallback. The curve uses the latest date on which VIX and VIX3M are both available; VIX9D is shown only if it carries the same date.<br><b>Why it matters:</b> Backwardation can accompany acute volatility demand.<br><b>How to read:</b> Contango is VIX3M above spot; a date mismatch or stale series is unavailable, never ratioed.<br><b>Source:</b> <a href="' + FAST_SOURCES["vix"] + '" target="_blank" rel="noopener">Cboe daily index history</a><br><b>Cadence:</b> daily business day · <b>Observation:</b> ' + (_fast_fresh(vix_data).get("observation_date") or "unavailable") + ' · <b>Fetched:</b> ' + (_fast_fresh(vix_data).get("fetched_at") or now_str) + '<br><b>Limitations:</b> a curve shape is a volatility-market condition, not a directional forecast.</div></details></div>')
 
+parts.append('<div class="sig-pair">')
+parts.append('<div class="chart-card"><div class="chart-title">VIX 30-Day History</div>')
+parts.append('<div class="chart-subtitle">Spot VIX above 20 = elevated fear regime</div><div id="chart-vix"></div></div>')
+parts.append('<div class="chart-card"><div class="chart-title">VIX Term Structure Snapshot</div>')
+parts.append('<div class="chart-subtitle">Upward slope = contango = panic receding</div><div id="chart-vix-term"></div></div>')
+parts.append('</div></div>')
+parts.append('<div class="sig-unit">')
 parts.append('<div class="signal-card ' + cls_fun + '">')
 parts.append('<div class="signal-label">&#9313; Crypto Funding (' + src_lbl + ')</div>')
 parts.append('<div class="signal-value ' + cls_btc + '">BTC ' + s_btc + '%</div>')
 parts.append('<div class="signal-sub">ETH ' + s_eth + '% &middot; OKX BTC ' + s_okx + '%</div>')
 parts.append('<div class="signal-badge ' + bdg_fun + '">' + txt_fun + '</div></div>')
 
+parts.append('</div><div class="sig-unit">')
 parts.append('<div class="signal-card ' + cls_cot + '">')
 parts.append('<div class="signal-label">&#9314; CTA Proxy (CFTC COT)</div>')
 parts.append('<div class="signal-value ' + cls_cot + '">' + s_cnet + '</div>')
 parts.append('<div class="signal-sub">' + s_cpct + '% OI &middot; as of ' + cot_date + '<br>WoW: ' + s_cchg + ' contracts</div>')
 parts.append('<div class="signal-badge ' + bdg_cot + '">' + txt_cot + '</div></div>')
 
+parts.append('<div class="chart-card"><div class="chart-title">NDX Leveraged Money Net (COT)</div>')
+parts.append('<div class="chart-subtitle">CTA proxy covering = selling abating</div><div id="chart-cot"></div></div>')
+parts.append('</div><div class="sig-unit">')
 parts.append('<div class="signal-card ' + cls_cor + '">')
 parts.append('<div class="signal-label">&#9315; Cross-Sector Correlation</div>')
 parts.append('<div class="signal-value ' + cls_cor + '">' + s_c2w + '</div>')
 parts.append('<div class="signal-sub">2W vs 1M avg: ' + s_c1m + ' &rarr; ' + s_c2w + '</div>')
 parts.append('<div class="signal-badge ' + bdg_cor + '">' + txt_cor + '</div></div>')
-parts.append('</div>')
+parts.append('<div class="chart-card"><div class="chart-title">Cross-Sector Correlation (Rolling 21D)</div>')
+parts.append('<div class="chart-subtitle">Declining = stocks re-dispersing to fundamentals</div><div id="chart-corr"></div></div>')
+parts.append('</div></div>')
 
+_blk("confirm")
 # confirm counter
 parts.append('<div class="confirm-counter">')
 parts.append('<div class="confirm-label">Signals confirmed</div>')
@@ -2668,6 +2820,7 @@ parts.append('<div class="confirm-dots">' + dots + '</div>')
 parts.append('<div class="confirm-text"><strong>' + str(sig_count) + '/' + str(sig_eval) + '</strong> &mdash; <span style="color:' + ccol + '">' + cmsg + '</span></div>')
 parts.append('</div>')
 
+_blk("gex")
 # Homebrew Index GEX section (SPY + QQQ)
 def _hgex_card(sym):
     res = hgex_results.get(sym, {})
@@ -2739,18 +2892,7 @@ parts.append('</div>')  # gex-section (homebrew)
 parts.append(hgex_state_block(hgex_state))
 
 
-# charts grid
-parts.append('<div class="charts-grid">')
-parts.append('<div class="chart-card"><div class="chart-title">VIX 30-Day History</div>')
-parts.append('<div class="chart-subtitle">Spot VIX above 20 = elevated fear regime</div><div id="chart-vix"></div></div>')
-parts.append('<div class="chart-card"><div class="chart-title">VIX Term Structure Snapshot</div>')
-parts.append('<div class="chart-subtitle">Upward slope = contango = panic receding</div><div id="chart-vix-term"></div></div>')
-parts.append('<div class="chart-card"><div class="chart-title">NDX Leveraged Money Net (COT)</div>')
-parts.append('<div class="chart-subtitle">CTA proxy covering = selling abating</div><div id="chart-cot"></div></div>')
-parts.append('<div class="chart-card"><div class="chart-title">Cross-Sector Correlation (Rolling 21D)</div>')
-parts.append('<div class="chart-subtitle">Declining = stocks re-dispersing to fundamentals</div><div id="chart-corr"></div></div>')
-parts.append('</div>')
-
+_blk("bottom")
 # bottom bar
 parts.append('<div class="bottom-bar">')
 parts.append('<div class="bottom-item">LPI: <span>FRED (WALCL/WTREGEN/RRPONTSYD/SOFR/DFF), spliced with Fed H.4.1 + NY Fed SOFR/RRP when FRED lags, + FiscalData + Yahoo VIX</span></div>')
@@ -2760,6 +2902,7 @@ parts.append('<div class="bottom-item">Funding: <span>Binance (CoinGecko) + OKX 
 parts.append('<div class="bottom-item">Index GEX: <span>homebrew SPY/QQQ (Yahoo option chains, BS gamma)</span></div>')
 parts.append('</div>')
 
+_blk("js")
 # JS
 parts.append('<script>')
 parts.append('(function(){')
@@ -3018,6 +3161,7 @@ parts.append('window.addEventListener("resize",function(){')
 parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-hgex-spy"].concat(sfrIds).concat(cotChartIds).concat(sparkIds).concat(clkIds).concat(tailIds).concat(scIds).forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')
 parts.append('});')
 parts.append('})();')
+parts.append(layout_render.JS)
 parts.append('</script></body></html>')
 
 # --- Data-health registry: sources owned by this script ---------------------
@@ -3038,7 +3182,50 @@ health.write_json("data/health.json")
 health.write_step_summary()
 print("Data health:", health.summary()["chip"])
 
-out = "\n".join(parts)
+# ---------------------------------------------------------------------------
+# Assemble the page in layout order
+# ---------------------------------------------------------------------------
+def B(name):
+    return BLOCKS.get(name, [])
+
+
+_hs = health.summary()
+_amp_badge_state = _amp_state
+_lpi_badge = _lpi_global_state()
+_tail_fold = ([('<div class="tail-readout">' + tail_readout + '</div>')] if (tail_ok and tail_readout) else []) + \
+             ['<details class="fp-expand"><summary>Full conditional tail table and bootstrap chart</summary>'] + B("tail") + ['</details>']
+_methods = ([layout_render.sec_open("sec-methods", "Methods &amp; data health", "方法与数据健康", "closed", "", "section-methods")]
+            + [layout_render.health_table_html(health.entries(), _hs)] + B("bottom") + [layout_render.sec_close()])
+_cal = ([layout_render.sec_open("sec-calendar", "Stress calendar", "压力日历", "closed", "", "section-calendar")]
+        + B("calendar") + [layout_render.sec_close()])
+
+_fund_body = B("funding") + B("fastcards")
+ordered = (
+    B("header") + B("overview")
+    + B("l1_hdr")
+    + [layout_render.sec_open("sec-lpi", "Liquidity Pressure Index", "流动性压力指数 LPI", "open", layout_render.state_badge(_lpi_badge), "section-lpi")]
+    + B("lpi_gauge") + B("lpi_factors") + B("lpi_charts") + _tail_fold + [layout_render.sec_close()]
+    + B("l2_hdr")
+    + [layout_render.sec_open("sec-funding", "Funding &amp; plumbing", "资金与流动性", "closed", layout_render.state_badge(_fund_state), "section-funding")]
+    + _fund_body + [layout_render.sec_close()]
+    + [layout_render.sec_open("sec-fedbs", "Fed balance sheet &amp; RMP", "美联储资产负债表与储备管理购债", "closed", layout_render.state_badge("context"))]
+    + B("fedbs") + [layout_render.sec_close()]
+    + [layout_render.sec_open("sec-credit", "Credit", "信用", "open", layout_render.state_badge(fred_mod["credit"]["state"]))]
+    + B("credit") + [layout_render.sec_close()]
+    + [layout_render.sec_open("sec-rates", "Rates &amp; term premium", "利率与期限溢价", "closed", layout_render.state_badge(fred_mod["rates"]["state"]))]
+    + B("rates") + [layout_render.sec_close()]
+    + B("l3_hdr")
+    + [layout_render.sec_open("sec-crowding", "Crowding", "拥挤度", "closed", layout_render.state_badge(_basis_global_state()), "section-crowding")]
+    + B("conc") + B("ai") + B("cot") + B("basis") + [layout_render.sec_close()]
+    + B("l4_hdr")
+    + [layout_render.sec_open("sec-amplifiers", "Amplifiers &amp; triggers", "放大器与触发器", "closed", layout_render.state_badge(_amp_badge_state), "section-amplifiers")]
+    + B("signals") + B("confirm") + B("gex") + [layout_render.sec_close()]
+    + _cal + _methods
+    + B("js")
+)
+parts = pre_parts + ordered
+out = "\n".join(parts).replace("@@HEALTH_CHIP@@", layout_render.health_chip_html(_hs))
+out = out.replace("</body>", dash_state.block(_dash_days) + "</body>", 1)
 
 with open("index.html", "w", encoding="utf-8") as f:
     f.write(out)

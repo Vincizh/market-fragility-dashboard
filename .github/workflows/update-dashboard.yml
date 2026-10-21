@@ -28,7 +28,7 @@ jobs:
 
       - name: Unit tests
         run: |
-          python -m unittest test_fast_metrics test_fred_monitor
+          python -m unittest test_fast_metrics test_fred_monitor test_dash_state
 
       - name: Generate dashboard
         run: python generate_dashboard.py

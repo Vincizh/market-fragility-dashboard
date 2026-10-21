@@ -46,6 +46,7 @@ try {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   await page.goto(pathToFileURL(out).href, { waitUntil: 'load' });
+  await page.evaluate(() => document.querySelectorAll('details.sec').forEach((d) => { d.open = true; }));
   await page.waitForFunction(() => {
     const el = document.getElementById('chart-fp-tga');
     return !!el && !!el.querySelector('.main-svg');

@@ -51,7 +51,7 @@ CSS = (
     ".mod-note{font-size:12px;color:var(--faint);line-height:1.5;margin:6px 0 12px}"
     ".mod-note a,.mod-intro a{color:#a5b4fc}"
     "@media(max-width:900px){.mc-grid,.mc-grid.cols-4{grid-template-columns:repeat(2,minmax(0,1fr))}.mod-charts{grid-template-columns:minmax(0,1fr)}}"
-    "@media(max-width:640px){.mc-grid,.mc-grid.cols-2,.mc-grid.cols-4{grid-template-columns:minmax(0,1fr)}.mod-chart .mfd-chart{height:260px}.mc-value{font-size:22px}}"
+    "@media(max-width:640px){.mc-grid,.mc-grid.cols-2,.mc-grid.cols-4{grid-template-columns:minmax(0,1fr)}.mod-chart .mfd-chart{height:260px}.mc-value{font-size:22px}.mc{padding:11px 12px}.mc-what{display:none}.mc-sub{margin-top:4px}}"
 )
 
 
@@ -123,6 +123,11 @@ def ranges_html(sec: str, default: str = "1Y") -> str:
     btns = "".join('<button type="button" data-sec="{s}" data-range="{r}"{a}>{r}</button>'.format(
         s=sec, r=r, a=' class="active"' if r == default else "") for r in ("3M", "6M", "1Y", "3Y", "Max"))
     return '<div class="mod-ranges" data-sec="{}">{}</div>'.format(sec, btns)
+
+
+def ranges_row(sec: str, default: str = "1Y") -> str:
+    """Range buttons only; the section title lives in the collapsible section summary."""
+    return '<div class="mod-head" style="justify-content:flex-end;margin-top:0">' + ranges_html(sec, default) + "</div>"
 
 
 def section_head(title_en: str, title_zh: str, sec: str, default: str | None = "1Y") -> str:
@@ -214,8 +219,8 @@ def funding_extras_html(f: dict[str, Any]) -> str:
 
 
 def fedbs_html(m: dict[str, Any]) -> str:
-    out = ['<div class="mod-section" id="sec-fedbs" data-testid="section-fed-bs">',
-           section_head("Fed balance sheet & RMP", "美联储资产负债表与储备管理购债", "fedbs", "1Y"),
+    out = ['<div class="mod-section" data-testid="section-fed-bs">',
+           ranges_row("fedbs", "1Y"),
            '<p class="mod-intro">Reserve management purchases (RMP) are purchases of short-dated Treasury bills that the Fed uses to keep reserves ample. '
            'They started on 2025-12-12 per the <a href="{}" target="_blank" rel="noopener">NY Fed statement</a>. This block is context, not a signal: no state is assigned.</p>'.format(e(m["rmp_url"])),
            grid_html(m["cards"][:3], 3), charts_html(m["charts"]),
@@ -228,8 +233,8 @@ def fedbs_html(m: dict[str, Any]) -> str:
 
 
 def credit_html(m: dict[str, Any]) -> str:
-    return "".join(['<div class="mod-section" id="sec-credit" data-testid="section-credit">',
-                    section_head("Credit conditions", "信用条件", "credit", "1Y"),
+    return "".join(['<div class="mod-section" data-testid="section-credit">',
+                    ranges_row("credit", "1Y"),
                     '<p class="mod-intro">ICE BofA option-adjusted spreads by rating, the CCC minus BB quality spread, and official financial conditions indexes. '
                     'States compare each series with its own history and its 20-day change.</p>',
                     '<div class="mod-sub">Spread ladder 利差梯度</div>', grid_html(m["ladder"], 3),
@@ -240,8 +245,8 @@ def credit_html(m: dict[str, Any]) -> str:
 
 
 def rates_html(m: dict[str, Any]) -> str:
-    return "".join(['<div class="mod-section" id="sec-rates" data-testid="section-rates">',
-                    section_head("Rates & term premium", "利率与期限溢价", "rates", "1Y"),
+    return "".join(['<div class="mod-section" data-testid="section-rates">',
+                    ranges_row("rates", "1Y"),
                     '<p class="mod-intro">Read together with the LPI duration supply factor: issuance pressure and term premium usually move together. '
                     'Term premium is a model estimate. Reference lines are operator references, not statistical thresholds.</p>',
                     grid_html(m["cards"], 3), charts_html(m["charts"]), "</div>"])

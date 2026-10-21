@@ -58,6 +58,12 @@ try {
     page.on('pageerror', (e) => consoleErrors.push('pageerror: ' + e.message));
 
     await page.goto(url, { waitUntil: 'load' });
+    // Mobile starts with several sections collapsed; open them all as a user would.
+    const defaults = await page.evaluate(() => ({
+      open: [...document.querySelectorAll('details.sec')].filter((d) => d.open).map((d) => d.id),
+      height: document.documentElement.scrollHeight,
+    }));
+    await page.evaluate(() => document.querySelectorAll('details.sec').forEach((d) => { d.open = true; }));
     await page.waitForFunction((ids) => ids.every((id) => {
       const el = document.getElementById(id);
       return !!el && (!!el.querySelector('.main-svg') || el.textContent.includes('unavailable'));
@@ -268,6 +274,57 @@ try {
     await page.waitForTimeout(800);
     const widths = await page.evaluate(() => [...document.querySelectorAll('.mfd-chart')].map((el) => el.clientWidth));
     check(`${tag} all v2 charts have width after opening details`, widths.length >= 8 && widths.every((w) => w > 0), widths.join(','));
+
+    // ---- Phase 5 layout ---------------------------------------------------
+    const lay = await page.evaluate(() => ({
+      tiles: document.querySelectorAll('[data-testid="scorecard"] .score').length,
+      wc: !!document.querySelector('[data-testid="what-changed"]'),
+      navLinks: document.querySelectorAll('.sec-nav a').length,
+      chip: (document.querySelector('[data-testid="health-chip"]') || {}).textContent || '',
+      takeaway: document.querySelectorAll('.takeaway-body li').length,
+      layers: document.querySelectorAll('.layer-header').length,
+      tailFolded: !!document.querySelector('details.fp-expand:not([open])') || !!document.querySelector('details.fp-expand'),
+      oldStrip: !!document.querySelector('.summary-strip'),
+      stateScript: !!document.getElementById('dash-state'),
+    }));
+    check(`${tag} scorecard has six tiles`, lay.tiles === 6, String(lay.tiles));
+    check(`${tag} what-changed panel present`, lay.wc);
+    check(`${tag} sticky navigation has ten links`, lay.navLinks === 10, String(lay.navLinks));
+    check(`${tag} health chip shows source counts`, /Sources \d+\/\d+/.test(lay.chip), lay.chip);
+    check(`${tag} takeaway has four numbered points`, lay.takeaway === 4, String(lay.takeaway));
+    check(`${tag} four layer headers`, lay.layers === 4, String(lay.layers));
+    check(`${tag} old summary strip removed`, !lay.oldStrip);
+    check(`${tag} daily state snapshot embedded`, lay.stateScript);
+    if (vp.label === 'mobile') {
+      check(`${tag} default open sections are Overview-first (LPI, Credit)`, defaults.open.join(',') === 'sec-lpi,sec-credit', defaults.open.join(','));
+      check(`${tag} default page height under 9000px`, defaults.height < 9000, String(defaults.height));
+    } else {
+      check(`${tag} all sections open by default`, defaults.open.length === 9, String(defaults.open.length));
+    }
+    // navigation: clicking a nav link opens and scrolls to the section
+    await page.evaluate(() => document.querySelectorAll('details.sec').forEach((d) => { d.open = false; }));
+    await page.click('.sec-nav a[data-target="sec-rates"]');
+    await page.waitForTimeout(1500);
+    const nav = await page.evaluate(() => {
+      const d = document.getElementById('sec-rates');
+      return { open: d.open, top: Math.round(d.getBoundingClientRect().top) };
+    });
+    check(`${tag} nav link opens and scrolls to the section`, nav.open && nav.top >= 0 && nav.top < 200, JSON.stringify(nav));
+    // scorecard tile jumps to its section
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.click('[data-testid="score-credit"]');
+    await page.waitForTimeout(500);
+    check(`${tag} scorecard tile opens its section`, await page.evaluate(() => document.getElementById('sec-credit').open));
+    // COT tabs
+    await page.evaluate(() => document.getElementById('sec-crowding').open = true);
+    const tabState = await page.evaluate(() => {
+      const btns = [...document.querySelectorAll('.tabs[data-tabs="cot"] button')];
+      if (btns.length < 2) return { n: btns.length };
+      btns[1].click();
+      const panes = [...document.querySelectorAll('.tab-pane[data-tabs="cot"]')];
+      return { n: btns.length, visible: panes.map((p) => !p.hidden) };
+    });
+    check(`${tag} COT tabs switch panes`, tabState.n >= 2 && tabState.visible.filter(Boolean).length === 1 && tabState.visible[1] === true, JSON.stringify(tabState));
     await page.evaluate(() => document.querySelectorAll('details').forEach((d) => { d.open = false; }));
 
     // ---- Layout / hygiene -------------------------------------------------

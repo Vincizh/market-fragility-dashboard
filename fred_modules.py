@@ -557,3 +557,73 @@ def build_rates(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
 def build_all(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
     return {"funding": build_funding(S, now), "fedbs": build_fedbs(S, now),
             "credit": build_credit(S, now), "rates": build_rates(S, now)}
+
+
+# ---------------------------------------------------------------------------
+# What changed: state changes and the largest weekly moves
+# ---------------------------------------------------------------------------
+def truncate(S: dict[str, pd.Series], cutoff: pd.Timestamp) -> dict[str, pd.Series]:
+    """Series as they stood on cutoff (observations on or before that date)."""
+    return {k: v[v.index <= cutoff] for k, v in S.items()}
+
+
+def _cards_of(M: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for key in ("cards", "backstops", "ladder"):
+        for sec in ("funding", "fedbs", "credit", "rates"):
+            for c in M.get(sec, {}).get(key, []):
+                out[c["id"]] = c
+    return out
+
+
+def state_changes(M_now: dict[str, Any], M_prev: dict[str, Any]) -> list[dict[str, Any]]:
+    """Cards whose descriptive state differs between now and a week ago (both computed from
+    the same FRED series, the earlier one truncated at its date)."""
+    now_c, prev_c = _cards_of(M_now), _cards_of(M_prev)
+    out = []
+    for cid, c in now_c.items():
+        p = prev_c.get(cid)
+        if not p or c["state"] in ("context", "na") or p["state"] in ("context", "na"):
+            continue
+        if c["state"] != p["state"]:
+            out.append({"id": cid, "title": c["title"].split(" · ")[0], "from": p["state"], "to": c["state"],
+                        "value": c["value"], "worse": mon.STATE_RANK[c["state"]] > mon.STATE_RANK[p["state"]]})
+    out.sort(key=lambda d: (not d["worse"], d["title"]))
+    return out
+
+
+MOVE_IDS = ("BAMLH0A0HYM2", "BAMLC0A0CM", "BAMLC0A4CBBB", "BAMLH0A1HYBB", "BAMLH0A2HYB", "BAMLH0A3HYC",
+            "DGS10", "DGS30", "DFII10", "THREEFYTP10", "T10Y2Y", "NFCI", "STLFSI4", "SOFRVOL",
+            "WSHOBL", "WRESBAL", "WTREGEN", "WLCFLPCL")
+
+
+def weekly_moves(S: dict[str, pd.Series], now: datetime, top: int = 5, min_abs_z: float = 1.5) -> list[dict[str, Any]]:
+    """Largest standardized one-week moves among a curated set of series.
+
+    Daily series use a 5-observation change, weekly series a 1-observation change; the z-score
+    compares that change with the series' own trailing 3-year distribution of the same change."""
+    cands = []
+    for sid in MOVE_IDS:
+        spec = fc.BY_ID.get(sid)
+        s = _get(S, sid)
+        if spec is None or s is None:
+            continue
+        if mon.freshness_of(s, spec, now).stale:
+            continue
+        weekly = not spec.cadence.startswith("daily")
+        n = 1 if weekly else 5
+        z = mon.change_z(s * spec.scale, n, 3, min_obs=40)
+        if z != z or abs(z) < min_abs_z:
+            continue
+        chg = mon.change_n(s, n, spec.scale)
+        val = float(s.iloc[-1]) * spec.scale
+        unit = spec.display
+        cands.append({"id": sid, "label": spec.label_en, "z": z, "chg": chg, "value": val, "unit": unit,
+                      "window": "1 week" if weekly else "5 trading days"})
+    cands.sort(key=lambda d: -abs(d["z"]))
+    for c in cands[:top]:
+        digits = 2 if c["unit"] in ("pct", "$T", "index") else 0
+        c["text"] = "{}: {} {} over {} to {} (z {:+.1f})".format(
+            c["label"], "up" if c["chg"] > 0 else "down", _fmt(abs(c["chg"]), c["unit"], digits), c["window"],
+            _fmt(c["value"], c["unit"], digits), c["z"])
+    return cands[:top]
