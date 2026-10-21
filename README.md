@@ -1,10 +1,13 @@
 # Market Fragility Dashboard
 
-A public-data dashboard for **market fragility, not market direction**. It separates three distinct questions:
+A public-data dashboard for **market fragility, not market direction**. The page is organised as a four-layer risk stack, read top to bottom:
 
-1. **L1 · Funding & liquidity** — is the market's funding cushion becoming less resilient?
-2. **L2 · Crowding** — where is positioning or index concentration vulnerable to an unwind?
-3. **L3 · Transmission & amplifiers** — are volatility, credit, dealer positioning, or AI leadership likely to amplify a move?
+1. **Fragility** — the Liquidity Pressure Index (LPI) and its conditional tail table.
+2. **Conditions** — funding and plumbing (SOFR, repo, reserves, TGA, standing facilities), the Fed balance sheet and reserve-management purchases, credit spreads, and rates and term premium.
+3. **Crowding** — S&P 500 concentration, AI leadership, CFTC positioning and the basis-trade proxy.
+4. **Amplifiers and triggers** — the de-leveraging bottom signals (VIX curve, crypto funding, CTA short covering, correlation) and dealer gamma.
+
+An overview scorecard, a what-changed panel and the key takeaway sit above the layers. A data-health chip in the header links to a table of every source with its last observation date and status.
 
 **Live dashboard:** <https://vincizh.github.io/market-fragility-dashboard/>
 
@@ -15,23 +18,45 @@ The dashboard is deterministic and refreshes hourly through GitHub Actions. A mi
 | Layer | Module | Formula / display | Source and cadence |
 |---|---|---|---|
 | L1 | Liquidity Pressure Index | Causal weekly percentiles of short rate, coupon supply, net liquidity and VIX | FRED, FiscalData, Cboe/Yahoo market history; weekly / daily inputs |
-| L1 | Reserves / GDP | `WRESBAL / (GDP × 1,000)` with a rolling 156-week percentile; warning/elevated requires two weekly observations | [FRED WRESBAL](https://fred.stlouisfed.org/graph/fredgraph.csv?id=WRESBAL), [FRED GDP](https://fred.stlouisfed.org/graph/fredgraph.csv?id=GDP) |
-| L1 | NY Fed repo accepted | Daily accepted amount and trailing 7-calendar-day sum; persistence / own-history percentile, not a dollar threshold | [NY Fed Markets API](https://markets.newyorkfed.org/api/rp/repo/all/results/last/40.json) |
-| L1 | Dollar Funding Pressure (SOFR − IORB · reserves · TGA) | Three-leg strategy overlay: funding price, liquidity buffer, fiscal drain, combined into a 0/3–3/3 resonance state | [NY Fed SOFR](https://markets.newyorkfed.org/api/rates/secured/sofr/last/15.json), [FRB PRATES IORB](https://www.federalreserve.gov/datadownload/Choose.aspx?rel=PRATES), [Federal Reserve H.4.1](https://www.federalreserve.gov/releases/h41/current/h41.htm), [FRED WRESBAL](https://fred.stlouisfed.org/series/WRESBAL), [FRED WTREGEN](https://fred.stlouisfed.org/series/WTREGEN), [Treasury DTS](https://fiscaldata.treasury.gov/datasets/daily-treasury-statement/operating-cash-balance) |
-| L1 | SOFR p99 − median | NY Fed published 99th percentile less the published median SOFR | [NY Fed SOFR API](https://markets.newyorkfed.org/api/rates/secured/sofr/last/15.json) |
-| L2 | CFTC positioning and basis proxy | Leveraged-fund / managed-money net positions, percentiles, and a 2y/5y/10y basis-trade proxy | [CFTC public reporting API](https://publicreporting.cftc.gov/) · weekly |
-| L2 | S&P 500 concentration | Sum of the largest 10 and 5 weights in SPY's official holdings file; local daily snapshots begin the history | [SSGA SPY holdings](https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx) |
-| L3 | VIX term structure | Official Cboe VIX9D, VIX and VIX3M closes; curve output requires the same observation date for all three | [Cboe VIX3M history](https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX3M_History.csv) |
-| L3 | Credit transmission | HY, IG and BBB ICE BofA option-adjusted spreads, plus 60-day changes | [FRED HY OAS](https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLH0A0HYM2), [IG](https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLC0A0CM), [BBB](https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLC0A4CBBB) |
-| L3 | AI breadth & relative strength | Fixed 19-security basket above 50d/200d MAs; SMH/SPY and SOXX/SPY ratio trends | Yahoo Finance adjusted daily closes |
-| L3 | Dealer gamma | Homebrew Black–Scholes gamma aggregation from SPY/QQQ option chains | Yahoo option chains |
-| L3 | Funding, CTA and correlation | Crypto funding, NDX COT short-covering proxy, cross-sector correlation | CoinGecko/OKX, CFTC, Yahoo Finance |
+| 1 | LPI conditional tail table | Forward S&P 500 outcomes by LPI band; folded by default | Yahoo ^GSPC weekly |
+| 2 | Reserves / GDP | `WRESBAL / (GDP × 1,000)` with a rolling 156-week percentile; warning/elevated requires two weekly observations | [FRED WRESBAL](https://fred.stlouisfed.org/graph/fredgraph.csv?id=WRESBAL), [FRED GDP](https://fred.stlouisfed.org/graph/fredgraph.csv?id=GDP) |
+| 2 | NY Fed repo accepted | Daily accepted amount and trailing 7-calendar-day sum; persistence / own-history percentile, not a dollar threshold | [NY Fed Markets API](https://markets.newyorkfed.org/api/rp/repo/all/results/last/40.json) |
+| 2 | Dollar Funding Pressure (SOFR − IORB · reserves · TGA) | Three-leg strategy overlay combined into a 0/3–3/3 resonance state | [NY Fed SOFR](https://markets.newyorkfed.org/api/rates/secured/sofr/last/15.json), [FRB PRATES IORB](https://www.federalreserve.gov/datadownload/Choose.aspx?rel=PRATES), [Federal Reserve H.4.1](https://www.federalreserve.gov/releases/h41/current/h41.htm), [Treasury DTS](https://fiscaldata.treasury.gov/datasets/daily-treasury-statement/operating-cash-balance) |
+| 2 | Funding extras and backstops | SOFR distribution, TGCR, SOFR volume; standing repo, swap lines, FIMA repo and discount window usage against their own history | FRED series listed in the data dictionary in [METHODOLOGY.md](METHODOLOGY.md) |
+| 2 | Fed balance sheet and RMP | Treasury bills and short coupons held, reserve-management-purchase pace, foreign official RRP pool | FRED H.4.1 series; programme background in the [NY Fed RMP statement](https://www.newyorkfed.org/markets/opolicy/operating_policy_251210a) and the [Federal Reserve press release](https://www.federalreserve.gov/newsevents/pressreleases/monetary20251210a1.htm) |
+| 2 | Credit | ICE BofA OAS by rating bucket, CCC minus BB, NFCI, ANFCI, St. Louis stress index, EM corporate OAS | FRED |
+| 2 | Rates and term premium | 2Y, 10Y, 30Y, real 10Y, breakeven, 10Y term premium, 10Y-2Y | FRED |
+| 3 | CFTC positioning and basis proxy | Leveraged-fund / managed-money net positions, percentiles, and a 2y/5y/10y basis-trade proxy | [CFTC public reporting API](https://publicreporting.cftc.gov/) · weekly |
+| 3 | S&P 500 concentration | Sum of the largest 10 and 5 weights in SPY's official holdings file; local daily snapshots begin the history | [SSGA SPY holdings](https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx) |
+| 3 | AI breadth and relative strength | Fixed 19-security basket above 50d/200d MAs; SMH/SPY and SOXX/SPY ratio trends | Yahoo Finance adjusted daily closes |
+| 4 | VIX term structure | Official Cboe VIX and VIX3M closes (VIX9D optional); the curve uses the latest date on which VIX and VIX3M are both available, with FRED VIXCLS/VXVCLS as fallback | [Cboe VIX3M history](https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX3M_History.csv) |
+| 4 | Dealer gamma | Homebrew Black–Scholes gamma aggregation from SPY/QQQ option chains; a reading is rejected when the chain has fewer than 200 usable contracts or 3 expiries, and the last accepted snapshot is shown labelled as cached | Yahoo option chains |
+| 4 | Crypto funding, CTA and correlation | Crypto funding rate (unit-checked), NDX COT short-covering proxy, cross-sector correlation | CoinGecko/OKX, CFTC, Yahoo Finance |
+| – | Liquidity calendar | Rolling 120 days: announced Treasury coupon settlements, FOMC decision days, tax dates, month and quarter ends, estimated refunding dates; weekly event count, no severity percentiles | [FiscalData upcoming auctions](https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/upcoming_auctions), [Fed FOMC calendar](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm) |
+
+The new FRED indicators (funding extras, backstops, Fed balance sheet, credit, rates) are descriptive. They do not enter the LPI, the de-leveraging tally or any composite.
+
+### Code layout
+
+| File | Role |
+|---|---|
+| `generate_dashboard.py` | Orchestration: fetches non-FRED sources, computes LPI, COT, signals, assembles the page |
+| `fast_metrics.py` | Freshness rules, FRED fetch with archive fallback, VIX alignment, funding unit checks, weekly issuance grid |
+| `fred_catalog.py` | Declarative list of FRED series with units, cadence, maximum age |
+| `fred_monitor.py` | Concurrent catalog fetch, spreads, percentiles, z-scores, descriptive states |
+| `fred_modules.py` / `fred_render.py` | Section builders and renderers for funding, Fed balance sheet, credit, rates; what-changed helpers |
+| `layout_render.py` | Navigation, scorecard, collapsible sections, COT heat strip, tabs, data-health table |
+| `dash_state.py` | Embedded 45-day snapshot used by the what-changed panel |
+| `stress_calendar.py` | Rolling 120-day liquidity calendar |
+| `index_gex.py` | Pure homebrew-GEX functions (no network) |
+| `health.py` | Source registry written to `data/health.json` and the Actions step summary |
+
 
 ## Critical data-quality rules
 
 ### VIX term structure
 
-The dashboard **does not use Yahoo `^VIX3M`**. It uses Cboe's official daily-history CSVs for VIX, VIX9D and VIX3M. The curve is unavailable if the latest dates do not exactly match or if the observation is stale. This avoids silently ratioing a current VIX against an old VIX3M print.
+The dashboard **does not use Yahoo `^VIX3M`**. It uses Cboe's official daily-history CSVs for VIX and VIX3M, with VIX9D as an optional third point, and falls back to FRED VIXCLS and VXVCLS if Cboe is unavailable. The curve is built on the latest date on which VIX and VIX3M both exist, and VIX9D is shown only if it carries that same date. The spot VIX history is independent of the curve. A curve older than the freshness limit is marked stale.
 
 ### Reserves are relative, not fixed dollar thresholds
 
@@ -85,7 +110,7 @@ The amplifier count is `confirmed / evaluable`. A signal whose source failed (VI
 
 ### Freshness and fallback
 
-Every Phase A/B card shows both the **observation date** and the **pipeline fetch time**, plus its expected cadence. Daily business-day data becomes stale after four calendar days and weekly reserve data after ten; stale data is gray. FRED requests use retry plus a versioned archive of official FRED CSV responses as a graceful fallback. The displayed observation date, not the page refresh time, governs freshness.
+Every Phase A/B card shows both the **observation date** and the **pipeline fetch time**, plus its expected cadence. Daily business-day data becomes stale after four calendar days and weekly reserve data after ten; stale data is gray. FRED requests use retry plus a versioned archive of official FRED CSV responses as a graceful fallback; the archive only grows (new observations are merged in, history is never shortened) and a cached row is labelled cached in the data-health table. FRED requests are sent without a custom User-Agent because the fredgraph endpoint stalls on custom or browser agents. Stale data is never forward-filled. The displayed observation date, not the page refresh time, governs freshness.
 
 ### S&P 500 concentration history
 
@@ -103,11 +128,17 @@ DIX is **not an automated signal or score** in this repository. FINRA ATS or Reg
 
 ```bash
 pip install yfinance requests pandas numpy openpyxl
-python -m unittest -v test_fast_metrics
-python generate_dashboard.py
+python -m unittest test_fast_metrics test_fred_monitor test_dash_state test_stress_calendar test_index_gex
+python generate_dashboard.py          # writes index.html
+npm install --no-save playwright@1.55.0 && npx playwright install chromium
+node test_dashboard_browser.mjs index.html
+node test_dashboard_degraded.mjs index.html
+# FRED outage scenario (page built only from the archived CSVs)
+MFD_FORCE_FRED_CACHE=1 MFD_OUTPUT=index-degraded.html python generate_dashboard.py
+node test_dashboard_fred_cache.mjs index-degraded.html
 ```
 
-The generator writes the static `index.html`. GitHub Actions runs hourly and commits `index.html`, daily SPY concentration snapshots, and refreshed official FRED fallback responses when data changes.
+GitHub Actions runs hourly with a 20-minute timeout. It runs the unit tests, the FRED-cache scenario, the main generation and the browser checks, then commits `index.html`, the daily SPY concentration snapshots, the FRED archive and `data/health.json` when data changes. `index-degraded.html` is never committed. Do not commit a locally generated `index.html`: it carries the embedded GEX and dashboard-state history that the hosted page accumulates.
 
 ## Methodology
 

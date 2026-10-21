@@ -13,6 +13,7 @@ from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, Iterable
 import json
+import os
 import time
 
 import numpy as np
@@ -202,6 +203,8 @@ def fetch_fred_series(series: str, start: str = "2018-01-01", *, session=None,
     """
     cache = FRED_CACHE_DIR / f"{series}.csv"
     try:
+        if os.environ.get("MFD_FORCE_FRED_CACHE") == "1":
+            raise RuntimeError("MFD_FORCE_FRED_CACHE=1: live FRED request skipped (degraded-source test)")
         # fredgraph ignores observation_start; cosd is the parameter that trims history.
         # Existing callers keep the full history (trim=False); the v2 catalog opts in.
         url = FRED_URL.format(series=series, start=start) + ("&cosd=" + start if trim else "")

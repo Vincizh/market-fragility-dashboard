@@ -28,7 +28,12 @@ jobs:
 
       - name: Unit tests
         run: |
-          python -m unittest test_fast_metrics test_fred_monitor test_dash_state test_stress_calendar
+          python -m unittest test_fast_metrics test_fred_monitor test_dash_state test_stress_calendar test_index_gex
+
+      # Degraded-source scenario: every live FRED request is forced to fail so the page is built
+      # from the archived official CSVs. The artifact is only used for the test and is not committed.
+      - name: Generate FRED-cache scenario
+        run: MFD_FORCE_FRED_CACHE=1 MFD_OUTPUT=index-degraded.html python generate_dashboard.py
 
       - name: Generate dashboard
         run: python generate_dashboard.py
@@ -45,6 +50,7 @@ jobs:
           npx playwright install --with-deps chromium
           node test_dashboard_browser.mjs index.html
           node test_dashboard_degraded.mjs index.html
+          node test_dashboard_fred_cache.mjs index-degraded.html
 
       - name: Commit and push updated index.html
         run: |

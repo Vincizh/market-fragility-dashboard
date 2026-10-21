@@ -35,6 +35,7 @@ import fred_modules
 import fred_monitor
 import fred_render
 import html as _html
+import index_gex
 import layout_render
 import stress_calendar
 import dash_state
@@ -1075,52 +1076,11 @@ gex_now = datetime.now(timezone.utc)
 print("Computing homebrew index GEX (SPY/QQQ)...")
 
 HOMEBREW_GEX_SYMBOLS = ["SPY", "QQQ"]
-HGEX_LOOKAHEAD_DAYS  = 45
-HGEX_MAX_EXPIRIES    = 10
-HGEX_SNAP_MAX        = 400        # rolling daily-snapshot cap per symbol
-HGEX_PCTILE_MIN_DAYS = 60         # suppress percentile until this much history
-HGEX_MIN_CONTRACTS   = 200        # fewer usable contracts than this is treated as an empty chain
-HGEX_MIN_EXPIRIES    = 3
-HGEX_STATE_RE = re.compile(
-    r'<script id="hgex-state" type="application/json">(.*?)</script>', re.DOTALL)
-
-
-def load_hgex_state(prev_html):
-    """Extract {symbol: {date: snapshot}} from a prior index.html string."""
-    if not prev_html:
-        return {}
-    m = HGEX_STATE_RE.search(prev_html)
-    if not m:
-        return {}
-    try:
-        raw = json.loads(m.group(1))
-    except (ValueError, TypeError):
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    out = {}
-    for sym, snaps in raw.items():
-        if isinstance(snaps, dict):
-            out[sym] = {d: v for d, v in snaps.items()
-                        if isinstance(v, dict) and (v.get("n_contracts") or 0) >= HGEX_MIN_CONTRACTS}
-    return out
-
-
-def hgex_state_block(state):
-    payload = json.dumps(state, separators=(",", ":")).replace("</", "<\\/")
-    return '<script id="hgex-state" type="application/json">' + payload + '</script>'
-
-
-def _norm_pdf(x):
-    return exp(-0.5 * x * x) / sqrt(2.0 * pi)
-
-
-def bs_gamma(S, K, T, sigma, r):
-    """Black-Scholes gamma = phi(d1) / (S*sigma*sqrt(T))."""
-    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
-        return 0.0
-    d1 = (log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrt(T))
-    return _norm_pdf(d1) / (S * sigma * sqrt(T))
+HGEX_LOOKAHEAD_DAYS  = index_gex.LOOKAHEAD_DAYS
+HGEX_MAX_EXPIRIES    = index_gex.MAX_EXPIRIES
+HGEX_PCTILE_MIN_DAYS = index_gex.PCTILE_MIN_DAYS
+load_hgex_state = index_gex.load_state
+hgex_state_block = index_gex.state_block
 
 
 def _option_chain_retry(tk, expiry, retries=2):
@@ -1135,7 +1095,7 @@ def _option_chain_retry(tk, expiry, retries=2):
 
 
 def compute_homebrew_gex(symbol, now_utc, r):
-    """Return (reading dict | None, n_expiries_succeeded)."""
+    """Fetch Yahoo chains and return (reading dict | None, n_expiries_succeeded)."""
     tk = yf.Ticker(symbol)
     spot = None
     try:
@@ -1145,9 +1105,8 @@ def compute_homebrew_gex(symbol, now_utc, r):
     if not spot or spot <= 0:
         spot = float(tk.history(period="1d")["Close"].iloc[-1])
 
-    exps = tk.options or []
     sel = []
-    for e in exps:
+    for e in (tk.options or []):
         try:
             days = (datetime.strptime(e, "%Y-%m-%d").date() - now_utc.date()).days
         except Exception:
@@ -1156,82 +1115,29 @@ def compute_homebrew_gex(symbol, now_utc, r):
             sel.append(e)
     sel = sel[:HGEX_MAX_EXPIRIES]
 
-    by_strike, call_by, put_by = {}, {}, {}
-    n_contracts = 0
-    n_ok_exp = 0
-    dbg = None
+    contracts, n_ok_exp = [], 0
     for e in sel:
         try:
             oc = _option_chain_retry(tk, e, 2)
         except Exception as ex:                      # noqa: BLE001
             print("  hgex {} expiry {} failed: {}".format(symbol, e, ex))
             continue
-        exp_dt = datetime.strptime(e, "%Y-%m-%d").replace(
-            hour=20, minute=0, tzinfo=timezone.utc)   # ~16:00 ET
-        T = (exp_dt - now_utc).total_seconds() / (365.0 * 86400.0)
-        if T < 1.0 / 365.0:
-            T = 1.0 / 365.0
+        exp_dt = datetime.strptime(e, "%Y-%m-%d").replace(hour=20, minute=0, tzinfo=timezone.utc)   # ~16:00 ET
+        T = max((exp_dt - now_utc).total_seconds() / (365.0 * 86400.0), 1.0 / 365.0)
         n_ok_exp += 1
         for df, is_call in [(oc.calls, True), (oc.puts, False)]:
             if df is None or df.empty:
                 continue
             for K, oi, iv in zip(df["strike"], df["openInterest"], df["impliedVolatility"]):
-                try:
-                    K, oi, iv = float(K), float(oi), float(iv)
-                except (TypeError, ValueError):
-                    continue
-                # NaN-safe: NaN fails every comparison, so reject explicitly.
-                if not (K == K and oi == oi and iv == iv):
-                    continue
-                if oi <= 0 or iv <= 0.001 or iv > 5.0:
-                    continue
-                g = bs_gamma(spot, K, T, iv, r)
-                dollar = g * oi * 100.0 * spot * spot * 0.01   # $ per 1% move
-                signed = dollar if is_call else -dollar
-                by_strike[K] = by_strike.get(K, 0.0) + signed
-                (call_by if is_call else put_by)[K] = \
-                    (call_by if is_call else put_by).get(K, 0.0) + dollar
-                n_contracts += 1
-                if dbg is None:
-                    dbg = (e, is_call, K, oi, iv, T, g, signed)
+                contracts.append((T, is_call, K, oi, iv))
         time.sleep(0.25)                             # gentle on Yahoo in CI
 
-    if n_ok_exp < HGEX_MIN_EXPIRIES or n_contracts < HGEX_MIN_CONTRACTS:
-        print("  hgex {}: insufficient chain (expiries={}, contracts={}); reading rejected".format(
-            symbol, n_ok_exp, n_contracts))
-        return None, n_ok_exp
-
-    net_gex = sum(by_strike.values()) / 1e9          # $bn per 1% move
-    strikes = sorted(by_strike.keys())
-
-    # Gamma flip: zero crossing of cumulative-from-low profile nearest spot.
-    flip, cum, prev_s, prev_c, crossings = None, 0.0, None, None, []
-    for K in strikes:
-        cum += by_strike[K]
-        if prev_c is not None and prev_c != 0 and (prev_c < 0) != (cum < 0):
-            x = prev_s + (K - prev_s) * (0.0 - prev_c) / (cum - prev_c) if cum != prev_c else K
-            crossings.append(x)
-        prev_s, prev_c = K, cum
-    if crossings:
-        flip = min(crossings, key=lambda x: abs(x - spot))
-
-    walls = [(round(k, 2), v / 1e9) for k, v in
-             sorted(by_strike.items(), key=lambda kv: -abs(kv[1]))[:3]]
-    call_wall = max(call_by.items(), key=lambda kv: kv[1])[0] if call_by else None
-    put_wall  = max(put_by.items(),  key=lambda kv: kv[1])[0] if put_by  else None
-    lo, hi = spot * 0.9, spot * 1.1
-    profile = [(round(k, 2), round(by_strike[k] / 1e9, 4)) for k in strikes if lo <= k <= hi]
-
-    if dbg:
-        print("  hgex BS check {}: exp={} {} K={} OI={:.0f} IV={:.3f} T={:.4f} "
-              "gamma={:.3e} $gamma/1%={:+.3e}".format(
-                  symbol, dbg[0], "call" if dbg[1] else "put", dbg[2],
-                  dbg[3], dbg[4], dbg[5], dbg[6], dbg[7]))
-    return {
-        "symbol": symbol, "spot": spot, "net_gex": net_gex, "flip": flip,
-        "call_wall": call_wall, "put_wall": put_wall, "walls": walls,
-        "n_expiries": n_ok_exp, "n_contracts": n_contracts, "profile": profile,
-    }, n_ok_exp
+    reading = index_gex.build_reading(symbol, spot, contracts, n_ok_exp, r)
+    if reading is None:
+        usable = sum(1 for c in contracts if index_gex.clean_contract(*c[2:]) is not None)
+        print("  hgex {}: insufficient chain (expiries={}, raw contracts={}, usable with open interest and IV={}); reading rejected".format(
+            symbol, n_ok_exp, len(contracts), usable))
+    return reading, n_ok_exp
 
 
 hgex_state = load_hgex_state(_prev_html)
@@ -1247,21 +1153,10 @@ for _sym in HOMEBREW_GEX_SYMBOLS:
     snaps = hgex_state.get(_sym, {})
     cached = False
     if _reading:
-        snaps[hgex_today] = {
-            "net_gex": _reading["net_gex"], "flip": _reading["flip"],
-            "spot": _reading["spot"], "n_expiries": _reading["n_expiries"],
-            "n_contracts": _reading["n_contracts"]}
-        if len(snaps) > HGEX_SNAP_MAX:
-            for d in sorted(snaps.keys())[:-HGEX_SNAP_MAX]:
-                del snaps[d]
+        snaps = index_gex.add_snapshot(snaps, hgex_today, _reading)
         hgex_state[_sym] = snaps
     elif snaps:
-        last = sorted(snaps.keys())[-1]
-        s = snaps[last]
-        _reading = {"symbol": _sym, "spot": s.get("spot"), "net_gex": s.get("net_gex"),
-                    "flip": s.get("flip"), "call_wall": None, "put_wall": None,
-                    "walls": [], "n_expiries": s.get("n_expiries", 0),
-                    "n_contracts": s.get("n_contracts", 0), "profile": [], "cached_date": last}
+        _reading = index_gex.cached_reading(_sym, snaps)
         cached = True
     else:
         hgex_results[_sym] = {"ok": False, "n_expiries": _nexp}
@@ -3241,7 +3136,7 @@ parts = pre_parts + ordered
 out = "\n".join(parts).replace("@@HEALTH_CHIP@@", layout_render.health_chip_html(_hs))
 out = out.replace("</body>", dash_state.block(_dash_days) + "</body>", 1)
 
-with open("index.html", "w", encoding="utf-8") as f:
+with open(os.environ.get("MFD_OUTPUT") or "index.html", "w", encoding="utf-8") as f:
     f.write(out)
 
 print("Done. chars={} signals={} LPI={} regime={}/{} basis={}".format(
