@@ -30,6 +30,10 @@ from math import log, sqrt, exp, pi
 from datetime import datetime, timezone
 
 import fast_metrics as fm
+import fred_catalog
+import fred_modules
+import fred_monitor
+import health
 
 print("Starting dashboard generation...")
 
@@ -41,6 +45,30 @@ print("Fetching Phase A/B fast variables...")
 fast = fm.fetch_fast_metrics("data/spy-concentration-history.json")
 if fast.get("errors"):
     print("Fast-variable partial errors:", fast["errors"])
+
+# --- v2 FRED catalog (funding extras, backstops, Fed balance sheet, credit, rates) ---
+health.reset()
+print("Fetching FRED catalog...")
+fred_series, fred_errors = fred_monitor.fetch_catalog()
+if fred_errors:
+    print("FRED catalog failures:", fred_errors)
+fred_mod = fred_modules.build_all(fred_series, fm.utc_now())
+print("FRED catalog: {}/{} series | funding={} fedbs={} credit={} rates={} backstops_in_use={}".format(
+    len(fred_series), len(fred_catalog.CATALOG), fred_mod["funding"]["state"], fred_mod["fedbs"]["state"],
+    fred_mod["credit"]["state"], fred_mod["rates"]["state"], fred_mod["funding"]["backstops_in_use"]))
+
+# Register the existing fast-variable modules in the health table.
+for _key, _label, _src in (("vix", "VIX term structure", "Cboe / FRED"), ("reserves", "Reserves to GDP", "FRED / H.4.1"),
+                           ("reserves_level", "Bank reserves (H.4.1)", "Federal Reserve H.4.1"),
+                           ("tga_level", "Treasury General Account", "Treasury DTS / H.4.1"),
+                           ("sofr_iorb", "SOFR minus IORB", "NY Fed / FRB"), ("sofr_tail", "SOFR 99th percentile", "NY Fed"),
+                           ("repo", "NY Fed repo operations", "NY Fed"), ("concentration", "S&P 500 concentration", "SSGA SPY holdings"),
+                           ("ai", "AI basket breadth", "Yahoo Finance")):
+    _m = fast.get(_key) or {}
+    _f = _m.get("freshness") or {}
+    _stale = bool(_f.get("stale", True))
+    health.register(_label, _src, _f.get("observation_date"), _f.get("cadence", ""),
+                    "stale" if _stale else "current", note="" if not _stale else str(_m.get("reason", "")))
 
 # --- VIX term structure (official Cboe close history; date alignment required) ---
 print("Reading official Cboe VIX term structure...")
@@ -2977,6 +3005,24 @@ parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lp
 parts.append('});')
 parts.append('})();')
 parts.append('</script></body></html>')
+
+# --- Data-health registry: sources owned by this script ---------------------
+_today = datetime.now(timezone.utc).date()
+for _k, _d in (lpi_factor_asof or {}).items():
+    _age = (_today - pd.Timestamp(_d).date()).days if _d else None
+    health.register("LPI factor " + _k, "FRED / Treasury / Cboe", _d, "weekly" if _k in ("net_liquidity",) else "daily",
+                    "current" if (_age is not None and _age <= 12) else "stale")
+_cot_dates = [m.get("date") for m in cot_markets.values() if m.get("date")]
+health.register("CFTC COT", "CFTC Socrata", max(_cot_dates) if _cot_dates else None, "weekly (Tuesday data, Friday release)",
+                "current" if _cot_dates and (_today - pd.Timestamp(max(_cot_dates)).date()).days <= 12 else "stale")
+health.register("Crypto funding", "CoinGecko / OKX", _today.isoformat() if (btc_fr_available or eth_fr_available) else None,
+                "intraday", "current" if (btc_fr_available or eth_fr_available) else "failed")
+for _sym, _r in hgex_results.items():
+    health.register("Index GEX " + _sym, "Yahoo Finance options", _r.get("cached_date") or (_today.isoformat() if _r.get("ok") else None),
+                    "daily snapshot", "cached" if _r.get("cached") else ("current" if _r.get("ok") else "failed"))
+health.write_json("data/health.json")
+health.write_step_summary()
+print("Data health:", health.summary()["chip"])
 
 out = "\n".join(parts)
 

@@ -191,7 +191,8 @@ def merge_fred_csv(old_text: str, new_text: str) -> str:
     return header + "\n" + "".join(f"{d},{merged[d]}\n" for d in sorted(merged))
 
 
-def fetch_fred_series(series: str, start: str = "2018-01-01", *, session=None) -> pd.Series:
+def fetch_fred_series(series: str, start: str = "2018-01-01", *, session=None,
+                      trim: bool = False) -> pd.Series:
     """Read the official FRED endpoint, falling back to an archived official CSV.
 
     The cache is refreshed after a successful live request and only protects the
@@ -201,8 +202,10 @@ def fetch_fred_series(series: str, start: str = "2018-01-01", *, session=None) -
     """
     cache = FRED_CACHE_DIR / f"{series}.csv"
     try:
-        response = _get(FRED_URL.format(series=series, start=start), timeout=30, retries=2,
-                        session=session, headers={})
+        # fredgraph ignores observation_start; cosd is the parameter that trims history.
+        # Existing callers keep the full history (trim=False); the v2 catalog opts in.
+        url = FRED_URL.format(series=series, start=start) + ("&cosd=" + start if trim else "")
+        response = _get(url, timeout=30, retries=2, session=session, headers={})
         series_data = _parse_fred_csv(response.text, series)
         cache.parent.mkdir(parents=True, exist_ok=True)
         old = cache.read_text(encoding="utf-8") if cache.exists() else ""
@@ -213,6 +216,10 @@ def fetch_fred_series(series: str, start: str = "2018-01-01", *, session=None) -
         if not cache.exists():
             raise live_error
         series_data = _parse_fred_csv(cache.read_text(encoding="utf-8"), series)
+        if trim:
+            series_data = series_data[series_data.index >= pd.Timestamp(start)]
+            if series_data.empty:
+                raise live_error
         series_data.attrs["source"] = "FRED cached official CSV"
         return series_data
 

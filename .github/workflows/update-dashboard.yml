@@ -9,6 +9,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
 
@@ -27,7 +28,7 @@ jobs:
 
       - name: Unit tests
         run: |
-          python -m unittest test_fast_metrics
+          python -m unittest test_fast_metrics test_fred_monitor
 
       - name: Generate dashboard
         run: python generate_dashboard.py
@@ -49,7 +50,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.html data/spy-concentration-history.json data/fred-cache
+          git add index.html data/spy-concentration-history.json data/fred-cache data/health.json
           git diff --staged --quiet || git commit -m "chore: auto-update dashboard $(date -u '+%Y-%m-%d %H:%M UTC')"
           git pull --rebase -X theirs origin main
           git push
