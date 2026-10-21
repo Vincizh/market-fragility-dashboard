@@ -103,9 +103,13 @@ def freshness(observation_date: date | datetime | str | None, cadence: str,
 
 
 def _get(url: str, *, params: dict[str, Any] | None = None, timeout: int = 40,
-         retries: int = 3, session: requests.Session | None = None) -> requests.Response:
+         retries: int = 3, session: requests.Session | None = None,
+         headers: dict[str, str] | None = None) -> requests.Response:
+    """GET with retries. headers=None sends the project UA; headers={} sends no custom
+    headers (FRED fredgraph stalls on custom or browser User-Agents, so FRED calls use {})."""
     http = session or requests.Session()
-    headers = {"User-Agent": "Market-Fragility-Dashboard/1.0 (public-data dashboard)"}
+    if headers is None:
+        headers = {"User-Agent": "Market-Fragility-Dashboard/1.0 (public-data dashboard)"}
     last: Exception | None = None
     for attempt in range(retries):
         try:
@@ -133,6 +137,60 @@ def _parse_fred_csv(text: str, series: str) -> pd.Series:
     return result
 
 
+FUNDING_MAX_ABS_PCT_8H = 0.30
+
+
+def normalize_funding(value: Any, source: str) -> float | None:
+    """Return a perpetual funding rate in percent per 8h, or None if unusable.
+
+    CoinGecko's derivatives endpoint reports funding_rate already in percent (Binance BTC
+    0.0068 means 0.0068% per 8h, matching OKX's fraction 0.000042 = 0.0042%). OKX reports a
+    fraction, so it is multiplied by 100. Magnitudes above 0.30% per 8h are treated as a
+    unit or source error (check source) rather than shown.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v:
+        return None
+    pct = v if source.lower() == "coingecko" else v * 100.0
+    return pct if abs(pct) <= FUNDING_MAX_ABS_PCT_8H else None
+
+
+def weekly_issuance_grid(auctions: pd.DataFrame, today: date) -> pd.Series:
+    """Weekly (W-WED) sum of auction offering amounts on a gap-free grid that runs to the
+    current W-WED week. Weeks without a coupon auction are zero, so the series never ends
+    at the last auction week and the LPI common as-of week is not dragged backwards."""
+    wk = auctions.set_index("auction_date")["offering_amt"].resample("W-WED").sum()
+    cur = pd.Timestamp(today).to_period("W-WED").end_time.normalize()
+    if wk.empty:
+        return wk
+    grid = pd.date_range(wk.index.min(), max(cur, wk.index.max()), freq="W-WED")
+    return wk.reindex(grid, fill_value=0.0).fillna(0.0)
+
+
+def merge_fred_csv(old_text: str, new_text: str) -> str:
+    """Merge two FRED CSV texts by observation date. New values win on overlap, the
+    result is sorted by date, numeric strings are kept verbatim, and the cache never
+    shrinks (ICE BofA series only return about 3 years of history from FRED)."""
+    def rows(text: str) -> tuple[str, dict[str, str]]:
+        lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+        if not lines:
+            return "", {}
+        out = {}
+        for ln in lines[1:]:
+            parts = ln.split(",", 1)
+            if len(parts) == 2 and parts[0]:
+                out[parts[0]] = parts[1]
+        return lines[0], out
+    old_h, old_r = rows(old_text)
+    new_h, new_r = rows(new_text)
+    header = new_h or old_h
+    merged = {**old_r, **new_r}
+    return header + "\n" + "".join(f"{d},{merged[d]}\n" for d in sorted(merged))
+
+
 def fetch_fred_series(series: str, start: str = "2018-01-01", *, session=None) -> pd.Series:
     """Read the official FRED endpoint, falling back to an archived official CSV.
 
@@ -143,10 +201,12 @@ def fetch_fred_series(series: str, start: str = "2018-01-01", *, session=None) -
     """
     cache = FRED_CACHE_DIR / f"{series}.csv"
     try:
-        response = _get(FRED_URL.format(series=series, start=start), timeout=20, retries=1, session=session)
+        response = _get(FRED_URL.format(series=series, start=start), timeout=30, retries=2,
+                        session=session, headers={})
         series_data = _parse_fred_csv(response.text, series)
         cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(response.text, encoding="utf-8")
+        old = cache.read_text(encoding="utf-8") if cache.exists() else ""
+        cache.write_text(merge_fred_csv(old, response.text), encoding="utf-8")
         series_data.attrs["source"] = "FRED live"
         return series_data
     except Exception as live_error:
@@ -277,36 +337,47 @@ def fetch_cboe_history(url: str, *, session=None) -> pd.Series:
     return result
 
 
-def vix_term_structure(spot: pd.Series, three_month: pd.Series, nine_day: pd.Series,
-                       now: datetime | None = None) -> dict[str, Any]:
-    """Validate exact-date alignment; never silently calculate a stale ratio."""
-    last_spot = spot.dropna().index.max() if len(spot) else None
-    last_3m = three_month.dropna().index.max() if len(three_month) else None
-    last_9d = nine_day.dropna().index.max() if len(nine_day) else None
-    dates = {d.date().isoformat() if d is not None else None for d in (last_spot, last_3m, last_9d)}
-    aligned = len(dates) == 1 and None not in dates
-    latest_date = last_spot.date() if last_spot is not None else None
-    f = freshness(latest_date, "daily business day", 4, now)
-    available = bool(aligned and not f.stale)
-    if not available:
+def vix_term_structure(spot: pd.Series, three_month: pd.Series, nine_day: pd.Series | None = None,
+                       now: datetime | None = None, source: str = "Cboe") -> dict[str, Any]:
+    """Term structure on the latest date shared by spot and VIX3M.
+
+    VIX9D is optional: it is used only when it has a close on that same date, otherwise
+    vix9d is None and the chart draws two bars. A stale common date is unavailable and
+    is never ratioed. The 30-day spot history is reported independently of the curve.
+    """
+    spot = spot.dropna() if spot is not None else pd.Series(dtype=float)
+    three_month = three_month.dropna() if three_month is not None else pd.Series(dtype=float)
+    nine_day = nine_day.dropna() if nine_day is not None else pd.Series(dtype=float)
+    last_spot = spot.index.max() if len(spot) else None
+    last_3m = three_month.index.max() if len(three_month) else None
+    last_9d = nine_day.index.max() if len(nine_day) else None
+    spot_f = freshness(last_spot.date() if last_spot is not None else None, "daily business day", 4, now)
+    hist_ok = last_spot is not None and not spot_f.stale
+    hist_dates = [d.strftime("%Y-%m-%d") for d in spot.tail(30).index] if hist_ok else []
+    hist_vals = [round(float(v), 2) for v in spot.tail(30).values] if hist_ok else []
+    common = spot.index.intersection(three_month.index)
+    latest = common.max() if len(common) else None
+    f = freshness(latest.date() if latest is not None else None, "daily business day", 4, now)
+    if latest is None or f.stale:
         return {
-            "available": False, "reason": "date mismatch" if not aligned else "stale",
+            "available": False, "reason": "date mismatch" if latest is None else "stale",
+            "source": source,
             "spot_date": str(last_spot.date()) if last_spot is not None else None,
             "vix3m_date": str(last_3m.date()) if last_3m is not None else None,
             "vix9d_date": str(last_9d.date()) if last_9d is not None else None,
-            "freshness": f.__dict__, "dates": [], "spot_history": [],
+            "freshness": f.__dict__, "dates": hist_dates, "spot_history": hist_vals,
         }
-    current_date = pd.Timestamp(latest_date)
+    v9 = float(nine_day.loc[latest]) if latest in nine_day.index else None
     return {
         "available": True,
-        "spot": float(spot.loc[current_date]),
-        "vix3m": float(three_month.loc[current_date]),
-        "vix9d": float(nine_day.loc[current_date]),
-        "ratio": float(spot.loc[current_date] / three_month.loc[current_date]),
-        "observation_date": current_date.strftime("%Y-%m-%d"),
+        "source": source,
+        "spot": float(spot.loc[latest]),
+        "vix3m": float(three_month.loc[latest]),
+        "vix9d": v9,
+        "ratio": float(spot.loc[latest] / three_month.loc[latest]),
+        "observation_date": latest.strftime("%Y-%m-%d"),
         "freshness": f.__dict__,
-        "dates": [d.strftime("%Y-%m-%d") for d in spot.tail(30).index],
-        "spot_history": [round(float(v), 2) for v in spot.tail(30).values],
+        "dates": hist_dates, "spot_history": hist_vals,
     }
 
 
@@ -1233,20 +1304,45 @@ def lpi_regime(value: float, d13: float) -> tuple[str, str, str, str, str]:
     return level, direction, "Elevated but stable: keep hedges on", "#f97316", "orange"
 
 
+def fetch_vix_with_fallback(session, current: datetime, errors: dict[str, str]) -> dict[str, Any]:
+    """Cboe first; if the curve is unavailable or any Cboe fetch fails, use FRED VIXCLS/VXVCLS."""
+    result: dict[str, Any] | None = None
+    try:
+        spot = fetch_cboe_history(CBOE_VIX_URL, session=session)
+        v3 = fetch_cboe_history(CBOE_VIX3M_URL, session=session)
+        try:
+            v9 = fetch_cboe_history(CBOE_VIX9D_URL, session=session)
+        except Exception as exc9:  # noqa: BLE001
+            v9 = None
+            errors["vix9d"] = str(exc9)
+        result = vix_term_structure(spot, v3, v9, current, source="Cboe")
+    except Exception as exc:  # noqa: BLE001
+        errors["vix"] = str(exc)
+    if result is not None and result.get("available"):
+        return result
+    try:
+        f_spot = fetch_fred_series("VIXCLS", start="2025-01-01", session=session)
+        f_3m = fetch_fred_series("VXVCLS", start="2025-01-01", session=session)
+        fred_res = vix_term_structure(f_spot, f_3m, None, current, source="FRED VIXCLS/VXVCLS")
+        if fred_res.get("available") or result is None:
+            return fred_res
+    except Exception as exc:  # noqa: BLE001
+        errors["vix_fred"] = str(exc)
+    if result is not None:
+        return result
+    return {"available": False, "reason": errors.get("vix", "unavailable"), "source": "none",
+            "freshness": freshness(None, "daily business day", 4, current).__dict__,
+            "dates": [], "spot_history": []}
+
+
 def fetch_fast_metrics(snapshot_path: str | Path, now: datetime | None = None) -> dict[str, Any]:
     """Fetch all Phase A/B fast variables; every module degrades independently."""
     current = now or utc_now()
     out: dict[str, Any] = {"fetched_at": current.strftime("%Y-%m-%d %H:%M UTC"), "errors": {}}
     session = requests.Session()
 
-    # Official Cboe curve.
-    try:
-        out["vix"] = vix_term_structure(fetch_cboe_history(CBOE_VIX_URL, session=session),
-                                         fetch_cboe_history(CBOE_VIX3M_URL, session=session),
-                                         fetch_cboe_history(CBOE_VIX9D_URL, session=session), current)
-    except Exception as exc:
-        out["vix"] = {"available": False, "reason": str(exc), "freshness": freshness(None, "daily business day", 4, current).__dict__}
-        out["errors"]["vix"] = str(exc)
+    # Official Cboe curve (VIX9D optional); FRED VIXCLS/VXVCLS as fallback.
+    out["vix"] = fetch_vix_with_fallback(session, current, out["errors"])
 
     # Official weekly H.4.1 balances (reserve balances + Treasury General Account).
     # The Fed's own release is fetched first because fredgraph.csv times out from

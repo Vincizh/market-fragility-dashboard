@@ -49,17 +49,18 @@ vix_available = bool(vix_data.get("available"))
 if vix_available:
     vix_val = float(vix_data["spot"])
     vix3m_val = float(vix_data["vix3m"])
-    vix9d_val = float(vix_data["vix9d"])
+    vix9d_val = float(vix_data["vix9d"]) if vix_data.get("vix9d") is not None else float("nan")
     vix_dates = vix_data.get("dates", [])
     vix_vals_list = vix_data.get("spot_history", [])
     vix_contango = vix3m_val > vix_val
-    print("Cboe VIX={:.2f} VIX3M={:.2f} VIX9D={:.2f} contango={}".format(
-        vix_val, vix3m_val, vix9d_val, vix_contango))
+    print("{} VIX={:.2f} VIX3M={:.2f} VIX9D={} contango={}".format(
+        vix_data.get("source", "Cboe"), vix_val, vix3m_val,
+        "n/a" if vix9d_val != vix9d_val else "{:.2f}".format(vix9d_val), vix_contango))
 else:
     # N/A rather than a stale/misaligned curve.  The false boolean keeps this
     # signal out of confirmation; the UI renders an explicit gray state.
     vix_val = vix3m_val = vix9d_val = float("nan")
-    vix_dates, vix_vals_list = [], []
+    vix_dates, vix_vals_list = vix_data.get("dates", []), vix_data.get("spot_history", [])
     vix_contango = False
     print("Cboe VIX term structure unavailable:", vix_data.get("reason", "unknown"))
 
@@ -72,14 +73,14 @@ try:
         raise ValueError("unexpected CoinGecko payload: {}".format(str(cg)[:120]))
     bb = next((x for x in cg if x.get("market") == "Binance (Futures)" and x.get("symbol") == "BTCUSDT"), None)
     be = next((x for x in cg if x.get("market") == "Binance (Futures)" and x.get("symbol") == "ETHUSDT"), None)
-    if bb: bnb_btc_fr = bb["funding_rate"] * 100
-    if be: bnb_eth_fr = be["funding_rate"] * 100
+    if bb: bnb_btc_fr = fm.normalize_funding(bb["funding_rate"], "coingecko")
+    if be: bnb_eth_fr = fm.normalize_funding(be["funding_rate"], "coingecko")
     print("CoinGecko BTC={} ETH={}".format(bnb_btc_fr, bnb_eth_fr))
 except Exception as e:
     print("CoinGecko error:", e)
 try:
-    okx_btc_fr = float(requests.get("https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP", timeout=12).json()["data"][0]["fundingRate"]) * 100
-    okx_eth_fr = float(requests.get("https://www.okx.com/api/v5/public/funding-rate?instId=ETH-USDT-SWAP", timeout=12).json()["data"][0]["fundingRate"]) * 100
+    okx_btc_fr = fm.normalize_funding(requests.get("https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP", timeout=12).json()["data"][0]["fundingRate"], "okx")
+    okx_eth_fr = fm.normalize_funding(requests.get("https://www.okx.com/api/v5/public/funding-rate?instId=ETH-USDT-SWAP", timeout=12).json()["data"][0]["fundingRate"], "okx")
     print("OKX BTC={} ETH={}".format(okx_btc_fr, okx_eth_fr))
 except Exception as e:
     print("OKX error:", e)
@@ -504,7 +505,7 @@ try:
     # Announced-but-not-yet-held auctions are excluded so the 4w sum never
     # runs ahead of the other factors.
     au = au[au["auction_date"] <= pd.Timestamp(datetime.now(timezone.utc).date())]
-    wk = au.set_index("auction_date")["offering_amt"].resample("W-WED").sum().fillna(0)
+    wk = fm.weekly_issuance_grid(au, datetime.now(timezone.utc).date())
     iss4 = (wk.rolling(4).sum().dropna()) / 1e9  # -> $ billions
     lpi_pct["duration_supply"] = pctile_series(iss4)
     lpi_rawser["duration_supply"] = iss4
@@ -1065,6 +1066,8 @@ HGEX_LOOKAHEAD_DAYS  = 45
 HGEX_MAX_EXPIRIES    = 10
 HGEX_SNAP_MAX        = 400        # rolling daily-snapshot cap per symbol
 HGEX_PCTILE_MIN_DAYS = 60         # suppress percentile until this much history
+HGEX_MIN_CONTRACTS   = 200        # fewer usable contracts than this is treated as an empty chain
+HGEX_MIN_EXPIRIES    = 3
 HGEX_STATE_RE = re.compile(
     r'<script id="hgex-state" type="application/json">(.*?)</script>', re.DOTALL)
 
@@ -1085,7 +1088,8 @@ def load_hgex_state(prev_html):
     out = {}
     for sym, snaps in raw.items():
         if isinstance(snaps, dict):
-            out[sym] = {d: v for d, v in snaps.items() if isinstance(v, dict)}
+            out[sym] = {d: v for d, v in snaps.items()
+                        if isinstance(v, dict) and (v.get("n_contracts") or 0) >= HGEX_MIN_CONTRACTS}
     return out
 
 
@@ -1179,7 +1183,9 @@ def compute_homebrew_gex(symbol, now_utc, r):
                     dbg = (e, is_call, K, oi, iv, T, g, signed)
         time.sleep(0.25)                             # gentle on Yahoo in CI
 
-    if n_ok_exp < 3:
+    if n_ok_exp < HGEX_MIN_EXPIRIES or n_contracts < HGEX_MIN_CONTRACTS:
+        print("  hgex {}: insufficient chain (expiries={}, contracts={}); reading rejected".format(
+            symbol, n_ok_exp, n_contracts))
         return None, n_ok_exp
 
     net_gex = sum(by_strike.values()) / 1e9          # $bn per 1% move
@@ -1357,7 +1363,8 @@ for lbl, ok in [("VIX Contango", vix_contango if vix_available else None),
     dots = dots + '<div class="dot ' + css + '" title="' + lbl + '"></div>'
 
 s_vdiff = "{:+.2f}".format(vix3m_val - vix_val) if vix_available else "N/A"
-s_v9d   = "{:.1f}".format(vix9d_val) if vix_available else "N/A"
+vix_has_9d = vix_available and vix9d_val == vix9d_val
+s_v9d   = "{:.1f}".format(vix9d_val) if vix_has_9d else "N/A"
 s_vix   = "{:.1f}".format(vix_val) if vix_available else "N/A"
 s_v3m   = "{:.1f}".format(vix3m_val) if vix_available else "N/A"
 s_btc   = "{:+.4f}".format(btc_fr) if btc_fr_available else "N/A"
@@ -1368,8 +1375,8 @@ s_cpct  = "{:.1f}".format(cot_pct)
 s_cchg  = "{:+,}".format(cot_change)
 s_c2w   = "{:.3f}".format(avg_c2w)
 s_c1m   = "{:.3f}".format(avg_c1m)
-s_ymax  = "{:.2f}".format(max(vix9d_val, vix_val, vix3m_val) * 1.25) if vix_available else "40"
-s_v9d_n = json.dumps(round(vix9d_val, 2) if vix_available else None)
+s_ymax  = "{:.2f}".format(max([v for v in (vix9d_val, vix_val, vix3m_val) if v == v]) * 1.25) if vix_available else "40"
+s_v9d_n = json.dumps(round(vix9d_val, 2) if vix_has_9d else None)
 s_vix_n = json.dumps(round(vix_val,   2) if vix_available else None)
 s_v3m_n = json.dumps(round(vix3m_val, 2) if vix_available else None)
 
@@ -2603,7 +2610,7 @@ parts.append('<span class="lpi-num" style="color:' + basis_col + '">' + s_basis 
 parts.append('<span class="lpi-scale">/ 100 &middot; basis-trade proxy 基差交易拥挤度</span>')
 parts.append('<span class="lpi-status" style="color:' + basis_col + '">' + basis_msg + '</span></div>')
 parts.append('<div class="lpi-meter"><div class="lpi-marker" style="left:' + s_basis_pos + '%"></div></div>')
-parts.append('<div class="lpi-ticks"><span>0 Benign</span><span>40</span><span>60</span><span>80 Crowded</span><span>100</span></div>')
+parts.append('<div class="lpi-ticks"><span style="left:0">0<i class="tick-word"> Benign</i></span><span style="left:40%">40</span><span style="left:60%">60</span><span style="left:80%">80<i class="tick-word"> Crowded</i></span><span style="left:100%">100</span></div>')
 if basis_bars_html:
     parts.append('<div class="lpi-factors" style="margin-top:12px;margin-bottom:0">' + basis_bars_html + '</div>')
 parts.append('<div class="tail-foot">Proxy = mean over 2y/5y/10y of [pctile(Asset-Mgr net long) + pctile(Lev-Fund net short)] / 2, '
@@ -2625,7 +2632,7 @@ parts.append('<div class="signal-bar">')
 parts.append('<div class="signal-card ' + cls_vix + '">')
 parts.append('<div class="signal-label">&#9312; VIX Term Structure · Cboe official</div>')
 parts.append('<div class="signal-value ' + cls_vix + '">' + s_vdiff + ' pts</div>')
-parts.append('<div class="signal-sub">VIX9D ' + s_v9d + ' &rarr; VIX ' + s_vix + ' &rarr; VIX3M ' + s_v3m + '</div>')
+parts.append('<div class="signal-sub">' + ('VIX9D ' + s_v9d + ' &rarr; ' if vix_has_9d else '') + 'VIX ' + s_vix + ' &rarr; VIX3M ' + s_v3m + ('' if vix_has_9d or not vix_available else ' (VIX9D unavailable; source ' + str(vix_data.get("source", "")) + ')') + '</div>')
 parts.append('<div class="signal-badge ' + bdg_vix + '">' + txt_vix + '</div><div class="fast-stamp">' + _fast_stamp(vix_data)
              + '</div><details class="metric-details"><summary>About VIX term structure</summary><div><b>Definition:</b> Cboe official VIX9D, VIX, and VIX3M closes. The curve is used only when all three latest observations share the same date.<br><b>Why it matters:</b> Backwardation can accompany acute volatility demand.<br><b>How to read:</b> Contango is VIX3M above spot; a date mismatch or stale series is unavailable, never ratioed.<br><b>Source:</b> <a href="' + FAST_SOURCES["vix"] + '" target="_blank" rel="noopener">Cboe daily index history</a><br><b>Cadence:</b> daily business day · <b>Observation:</b> ' + (_fast_fresh(vix_data).get("observation_date") or "unavailable") + ' · <b>Fetched:</b> ' + (_fast_fresh(vix_data).get("fetched_at") or now_str) + '<br><b>Limitations:</b> a curve shape is a volatility-market condition, not a directional forecast.</div></details></div>')
 
@@ -2827,11 +2834,14 @@ parts.append('if(!vixHistD.length){vixEmpty("chart-vix","VIX history unavailable
 parts.append('Plotly.newPlot("chart-vix",[{x:' + j_vd + ',y:' + j_vv + ',type:"scatter",mode:"lines",')
 parts.append('  line:{color:"#f59e0b",width:2},fill:"tozeroy",fillcolor:"rgba(245,158,11,0.07)"}],')
 parts.append('  Object.assign({},T,{shapes:[vixShape]}),CFG);}')
-parts.append('if(!VIX_OK){vixEmpty("chart-vix-term","Term structure unavailable: VIX9D / VIX / VIX3M quotes are stale or not on the same date");}else{')
-parts.append('Plotly.newPlot("chart-vix-term",[{x:["VIX9D","VIX spot","VIX3M"],y:[' + s_v9d_n + ',' + s_vix_n + ',' + s_v3m_n + '],')
-parts.append('  type:"bar",marker:{color:["#ef4444","#f59e0b","#10b981"],line:{width:0}},')
-parts.append('  text:["' + s_v9d_n + '","' + s_vix_n + '","' + s_v3m_n + '"],textposition:"outside",textfont:{color:"#e2e8f0",size:12},')
-parts.append('  width:[0.5,0.5,0.5]}],')
+parts.append('if(!VIX_OK){vixEmpty("chart-vix-term","Term structure unavailable: VIX and VIX3M closes are stale or not on a common date");}else{')
+parts.append('var vtX=["VIX9D","VIX spot","VIX3M"],vtY=[' + s_v9d_n + ',' + s_vix_n + ',' + s_v3m_n + '],vtC=["#ef4444","#f59e0b","#10b981"];')
+parts.append('var vtK=vtY.map(function(v,i){return v!==null?i:-1;}).filter(function(i){return i>=0;});')
+parts.append('vtX=vtK.map(function(i){return vtX[i];});vtC=vtK.map(function(i){return vtC[i];});vtY=vtK.map(function(i){return vtY[i];});')
+parts.append('Plotly.newPlot("chart-vix-term",[{x:vtX,y:vtY,')
+parts.append('  type:"bar",marker:{color:vtC,line:{width:0}},')
+parts.append('  text:vtY.map(function(v){return v.toFixed(2);}),textposition:"outside",textfont:{color:"#e2e8f0",size:12},')
+parts.append('  width:vtY.map(function(){return 0.5;})}],')
 parts.append('  {paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",font:{color:"#94a3b8",size:12},')
 parts.append('   xaxis:{type:"category",gridcolor:"#1e2433",tickfont:{size:12,color:"#94a3b8"},fixedrange:true},')
 parts.append('   yaxis:{gridcolor:"#1e2433",tickfont:{size:12},range:[0,' + s_ymax + '],automargin:true,fixedrange:true},')

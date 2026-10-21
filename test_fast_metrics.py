@@ -1,6 +1,7 @@
 """Offline tests for Phase A/B fast-variable transformations and parsers."""
 import tempfile
 import unittest
+from unittest import mock
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -16,14 +17,89 @@ class FastMetricsTests(unittest.TestCase):
         self.assertEqual(f.age_days, 9)
         self.assertEqual(f.observation_date, "2026-08-01")
 
-    def test_cboe_vix_requires_exact_matching_observation_dates(self):
+    def test_vix_uses_latest_common_date_and_optional_vix9d(self):
+        i = pd.to_datetime(["2026-08-05", "2026-08-06", "2026-08-07"])
+        spot = pd.Series([16, 17, 18], index=i)
+        v3 = pd.Series([19, 20], index=i[:2])
+        v9 = pd.Series([15, 16, 17], index=i)
+        out = fm.vix_term_structure(spot, v3, v9, datetime(2026, 8, 8, tzinfo=timezone.utc))
+        self.assertTrue(out["available"])
+        self.assertEqual(out["observation_date"], "2026-08-06")
+        self.assertEqual(out["vix9d"], 16.0)
+        self.assertEqual(len(out["spot_history"]), 3)
+        no9 = fm.vix_term_structure(spot, v3, None, datetime(2026, 8, 8, tzinfo=timezone.utc))
+        self.assertTrue(no9["available"])
+        self.assertIsNone(no9["vix9d"])
+
+    def test_vix_unavailable_without_fresh_common_date_but_keeps_spot_history(self):
         i = pd.to_datetime(["2026-08-06", "2026-08-07"])
         spot = pd.Series([17, 18], index=i)
-        v3 = pd.Series([20], index=i[:1])
-        v9 = pd.Series([15, 16], index=i)
-        out = fm.vix_term_structure(spot, v3, v9, datetime(2026, 8, 8, tzinfo=timezone.utc))
+        out = fm.vix_term_structure(spot, pd.Series(dtype=float), None, datetime(2026, 8, 8, tzinfo=timezone.utc))
         self.assertFalse(out["available"])
         self.assertEqual(out["reason"], "date mismatch")
+        self.assertEqual(out["spot_history"], [17.0, 18.0])
+        old = pd.to_datetime(["2026-07-01"])
+        stale = fm.vix_term_structure(pd.Series([17], index=old), pd.Series([19], index=old), None,
+                                      datetime(2026, 8, 8, tzinfo=timezone.utc))
+        self.assertFalse(stale["available"])
+        self.assertEqual(stale["reason"], "stale")
+
+    def test_vix_falls_back_to_fred_when_cboe_fails(self):
+        i = pd.to_datetime(["2026-08-06", "2026-08-07"])
+        def fake_cboe(url, session=None):
+            raise RuntimeError("cboe down")
+        def fake_fred(series, start="2018-01-01", session=None):
+            vals = {"VIXCLS": [17.0, 18.0], "VXVCLS": [20.0, 21.0]}[series]
+            return pd.Series(vals, index=i)
+        errors = {}
+        with mock.patch.object(fm, "fetch_cboe_history", fake_cboe), \
+                mock.patch.object(fm, "fetch_fred_series", fake_fred):
+            out = fm.fetch_vix_with_fallback(None, datetime(2026, 8, 8, tzinfo=timezone.utc), errors)
+        self.assertTrue(out["available"])
+        self.assertEqual(out["source"], "FRED VIXCLS/VXVCLS")
+        self.assertIsNone(out["vix9d"])
+
+    def test_fred_request_sends_no_custom_user_agent(self):
+        seen = {}
+        class Resp:
+            text = "observation_date,X\n2026-08-06,1.0\n"
+            def raise_for_status(self): pass
+        class Sess:
+            def get(self, url, params=None, timeout=None, headers=None):
+                seen["headers"] = headers
+                return Resp()
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(fm, "FRED_CACHE_DIR", pathlib.Path(d)):
+            fm.fetch_fred_series("X", session=Sess())
+        self.assertEqual(seen["headers"], {})
+
+    def test_merge_fred_csv_never_shrinks_and_new_wins(self):
+        old = "observation_date,X\n2026-01-01,1.0\n2026-01-02,2.0\n2026-01-03,3.0\n"
+        new = "observation_date,X\n2026-01-03,3.5\n2026-01-04,4.0\n"
+        merged = fm.merge_fred_csv(old, new)
+        lines = merged.strip().splitlines()
+        self.assertEqual(lines[0], "observation_date,X")
+        self.assertEqual(len(lines) - 1, 4)
+        self.assertIn("2026-01-03,3.5", lines)
+        self.assertEqual(lines[1], "2026-01-01,1.0")
+        shorter = fm.merge_fred_csv(old, "observation_date,X\n2026-01-03,3.0\n")
+        self.assertGreaterEqual(len(shorter.strip().splitlines()), len(old.strip().splitlines()))
+
+    def test_weekly_issuance_grid_fills_gap_weeks_to_current_week(self):
+        au = pd.DataFrame({"auction_date": pd.to_datetime(["2026-09-15", "2026-09-29", "2026-10-06"]),
+                           "offering_amt": [10.0, 20.0, 30.0]})
+        wk = fm.weekly_issuance_grid(au, date(2026, 10, 21))
+        self.assertEqual(wk.index[-1], pd.Timestamp("2026-10-21"))
+        self.assertEqual(wk.loc["2026-10-21"], 0.0)
+        self.assertEqual(wk.loc["2026-09-23"], 0.0)
+        self.assertEqual(float(wk.sum()), 60.0)
+        self.assertTrue((wk.index[1:] - wk.index[:-1] == pd.Timedelta(days=7)).all())
+
+    def test_normalize_funding_units_and_sanity_bound(self):
+        self.assertAlmostEqual(fm.normalize_funding(0.006829, "coingecko"), 0.006829)
+        self.assertAlmostEqual(fm.normalize_funding(0.0000421, "okx"), 0.00421, places=6)
+        self.assertIsNone(fm.normalize_funding(0.6725, "coingecko"))
+        self.assertIsNone(fm.normalize_funding("x", "okx"))
 
     def test_calendar_flags_tax_month_and_quarter_end(self):
         self.assertIn("corporate tax date", fm.calendar_flags(date(2026, 6, 15)))
