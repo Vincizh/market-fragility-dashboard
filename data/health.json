@@ -1,0 +1,581 @@
+{
+ "generated_at": "2026-10-21 06:10 UTC",
+ "sources": [
+  {
+   "cadence": "daily snapshot",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "Index GEX QQQ",
+   "note": "",
+   "observation_date": "2026-10-21",
+   "source": "Yahoo Finance options",
+   "status": "cached"
+  },
+  {
+   "cadence": "daily snapshot",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "Index GEX SPY",
+   "note": "",
+   "observation_date": "2026-10-21",
+   "source": "Yahoo Finance options",
+   "status": "cached"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "AI basket breadth",
+   "note": "",
+   "observation_date": "2026-10-20",
+   "source": "Yahoo Finance",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, week ended Wednesday)",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "Bank reserves (H.4.1)",
+   "note": "",
+   "observation_date": "2026-10-14",
+   "source": "Federal Reserve H.4.1",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (Tuesday data, Friday release)",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "CFTC COT",
+   "note": "",
+   "observation_date": "2026-10-13",
+   "source": "CFTC Socrata",
+   "status": "current"
+  },
+  {
+   "cadence": "intraday",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "Crypto funding",
+   "note": "",
+   "observation_date": "2026-10-21",
+   "source": "CoinGecko / OKX",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (Friday)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED ANFCI",
+   "note": "FRED live",
+   "observation_date": "2026-10-09",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED BAMLC0A0CM",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED BAMLC0A4CBBB",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED BAMLEMCBPIOAS",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED BAMLH0A0HYM2",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED BAMLH0A1HYBB",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED BAMLH0A2HYB",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED BAMLH0A3HYC",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED DCPF3M",
+   "note": "FRED live",
+   "observation_date": "2026-10-16",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED DFII10",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED DGS10",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED DGS2",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED DGS30",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED DGS5",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED DTB3",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED DTWEXBGS",
+   "note": "FRED live",
+   "observation_date": "2026-10-16",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED H41RESPPALGTRFNWW",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED IORB",
+   "note": "FRED live",
+   "observation_date": "2026-10-21",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (Friday)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED NFCI",
+   "note": "FRED live",
+   "observation_date": "2026-10-09",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED RPONTSYD",
+   "note": "FRED live",
+   "observation_date": "2026-10-20",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED SOFR",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED SOFR1",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED SOFR25",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED SOFR75",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED SOFR99",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED SOFRVOL",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (Friday)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED STLFSI4",
+   "note": "FRED live",
+   "observation_date": "2026-10-09",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED SWPT",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED T10Y2Y",
+   "note": "FRED live",
+   "observation_date": "2026-10-20",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED T10Y3M",
+   "note": "FRED live",
+   "observation_date": "2026-10-20",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED T10YIE",
+   "note": "FRED live",
+   "observation_date": "2026-10-20",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.8)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED TASACBW027SBOG",
+   "note": "FRED live",
+   "observation_date": "2026-10-07",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED TGCRRATE",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED THREEFYTP10",
+   "note": "FRED live",
+   "observation_date": "2026-10-16",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED VIXCLS",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED VXVCLS",
+   "note": "FRED live",
+   "observation_date": "2026-10-19",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WALCL",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WLCFLPCL",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WLRRAFOIAL",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WRESBAL",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WSEFINTL1",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WSHOBL",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WSHOMCB",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WSHONBNL",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WSHOSHO",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, Wednesday level, Thursday release)",
+   "fetched_at": "2026-10-21 06:09 UTC",
+   "name": "FRED WTREGEN",
+   "note": "FRED live",
+   "observation_date": "2026-10-14",
+   "source": "FRED fredgraph.csv",
+   "status": "current"
+  },
+  {
+   "cadence": "daily",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "LPI factor duration_supply",
+   "note": "",
+   "observation_date": "2026-10-21",
+   "source": "FRED / Treasury / Cboe",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "LPI factor net_liquidity",
+   "note": "",
+   "observation_date": "2026-10-14",
+   "source": "FRED / Treasury / Cboe",
+   "status": "current"
+  },
+  {
+   "cadence": "daily",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "LPI factor short_rate",
+   "note": "",
+   "observation_date": "2026-10-21",
+   "source": "FRED / Treasury / Cboe",
+   "status": "current"
+  },
+  {
+   "cadence": "daily",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "LPI factor vol_amplifier",
+   "note": "",
+   "observation_date": "2026-10-21",
+   "source": "FRED / Treasury / Cboe",
+   "status": "current"
+  },
+  {
+   "cadence": "daily",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "NY Fed repo operations",
+   "note": "",
+   "observation_date": "2026-10-20",
+   "source": "NY Fed",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (GDP quarterly, carried forward)",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "Reserves to GDP",
+   "note": "",
+   "observation_date": "2026-10-14",
+   "source": "FRED / H.4.1",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "S&P 500 concentration",
+   "note": "",
+   "observation_date": "2026-10-19",
+   "source": "SSGA SPY holdings",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "SOFR 99th percentile",
+   "note": "",
+   "observation_date": "2026-10-19",
+   "source": "NY Fed",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "SOFR minus IORB",
+   "note": "",
+   "observation_date": "2026-10-19",
+   "source": "NY Fed / FRB",
+   "status": "current"
+  },
+  {
+   "cadence": "weekly (H.4.1, week ended Wednesday)",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "Treasury General Account",
+   "note": "",
+   "observation_date": "2026-10-14",
+   "source": "Treasury DTS / H.4.1",
+   "status": "current"
+  },
+  {
+   "cadence": "daily business day",
+   "fetched_at": "2026-10-21 06:10 UTC",
+   "name": "VIX term structure",
+   "note": "",
+   "observation_date": "2026-10-20",
+   "source": "Cboe / FRED",
+   "status": "current"
+  }
+ ],
+ "summary": {
+  "all_current": false,
+  "cached": 2,
+  "chip": "Sources 61/63 current \u00b7 2 cached",
+  "current": 61,
+  "failed": 0,
+  "stale": 0,
+  "total": 63
+ }
+}
