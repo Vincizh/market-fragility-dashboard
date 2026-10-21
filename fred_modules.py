@@ -4,6 +4,8 @@ into HTML. Every card fails independently: a missing or stale series becomes a g
 """
 from __future__ import annotations
 
+import re
+
 from datetime import datetime
 from typing import Any
 
@@ -705,6 +707,32 @@ def _card_chart_spec(cid: str, S: dict[str, pd.Series], card: dict[str, Any]) ->
     return None
 
 
+_CHG_RE = re.compile(r"(?:^|·\s*)(20d|4w|4-week change|13-week change|5d change)\s+([+\-−][^·]*?)\s*(?:·|$)")
+_CHG_OBS = {"20d": 20, "4w": 4, "4-week change": 4, "13-week change": 13, "5d change": 5}
+_CHG_LBL = {"20d": "20d", "4w": "4w", "4-week change": "4w", "13-week change": "13w", "5d change": "5d"}
+
+
+def _add_change_window(c: dict[str, Any], chart: dict[str, Any]) -> None:
+    """Pull the headline change (e.g. '20d +63 bp') out of the card text, show it next to the value
+    and shade the same window on the chart so the slope is visible without reading."""
+    m = None
+    for mm in _CHG_RE.finditer(c.get("sub", "")):
+        m = mm
+        if mm.group(1) in ("20d", "4w", "4-week change"):
+            break
+    if not m:
+        return
+    key, val = m.group(1), m.group(2).strip()
+    sign = val[:1]
+    c["chg_txt"] = "{} {} {}".format("▲" if sign == "+" else "▼", _CHG_LBL[key], val)
+    c["chg_dir"] = "up" if sign == "+" else "down"
+    c["chg_color"] = CARD_LINE.get(c["state"], CARD_LINE["context"])
+    x = chart["traces"][0]["x"]
+    n = _CHG_OBS[key]
+    if len(x) > n:
+        chart["band"] = {"x0": x[-n - 1], "x1": x[-1], "label": _CHG_LBL[key] + " " + val}
+
+
 def attach_card_charts(M: dict[str, Any], S: dict[str, pd.Series]) -> None:
     """Give every non-stale card a chart payload (id mcc-<card id>) and collect them per section."""
     for sec in ("funding", "fedbs", "credit", "rates"):
@@ -726,6 +754,7 @@ def attach_card_charts(M: dict[str, Any], S: dict[str, pd.Series]) -> None:
                 if spec.get("vlines"):
                     chart["vlines"] = spec["vlines"]
                 c["chart_id"] = cid
+                _add_change_window(c, chart)
                 sec_charts.append(chart)
         M[sec]["card_charts"] = sec_charts
         have = {c["id"] for c in sec_charts}

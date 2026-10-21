@@ -645,8 +645,19 @@ def ai_breadth_and_rs(price_df: pd.DataFrame, now: datetime | None = None) -> di
                    "change60": float(ratio.iloc[-1] / ratio.iloc[-min(61, len(ratio))] - 1),
                    "dates": [d.strftime("%Y-%m-%d") for d in ratio.tail(252).index],
                    "history": [round(float(x), 6) for x in ratio.tail(252).values]}
+    def _share_hist(window: int) -> pd.Series:
+        px = close[available]
+        ma = px.rolling(window).mean()
+        valid = px.notna() & ma.notna()
+        hits = ((px > ma) & valid).sum(axis=1)
+        den = valid.sum(axis=1)
+        return (hits / den.where(den > 0) * 100.0).dropna().tail(252)
+    b50, b200 = _share_hist(50), _share_hist(200)
     f = freshness(latest, "daily business day", 4, now)
     return {"available": True, "constituents_available": available, "constituent_count": len(available),
+            "breadth_dates": [d.strftime("%Y-%m-%d") for d in b50.index],
+            "breadth50_history": [round(float(v), 1) for v in b50.values],
+            "breadth200_history": [round(float(v), 1) for v in b200.reindex(b50.index).values],
             "above50": above50 / valid50 * 100, "above200": above200 / valid200 * 100,
             "valid50": valid50, "valid200": valid200,
             "rs": rs, "observation_date": latest.strftime("%Y-%m-%d"), "freshness": f.__dict__}

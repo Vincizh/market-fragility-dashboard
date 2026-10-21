@@ -852,10 +852,20 @@ if lpi_has and avail_pct:
 # --- Item 2: per-factor 52w score sparklines + WoW / 13w change --------------
 lpi_spark = {}     # factor -> [52 scores]
 lpi_change = {}    # factor -> {"wow":x, "w13":y}
+LPI_FACTOR_CHARTS = []
 for k in lpi_order:
     if lpi_ok.get(k):
         ps = lpi_pct[k].dropna()
         lpi_spark[k] = [round(float(x), 1) for x in ps.tail(52).values]
+        _t = ps.tail(52)
+        _x = [d.strftime("%Y-%m-%d") for d in _t.index]
+        _lfc = {"id": "lfc-" + k, "unit": "score", "default_range": "1Y", "mini": True,
+                "traces": [{"name": k, "color": "#a5b4fc", "type": "scatter", "x": _x, "y": [round(float(v), 1) for v in _t.values]}],
+                "refs": [{"y": 60, "label": "60", "color": "#f59e0b"}, {"y": 80, "label": "80", "color": "#ef4444"}]}
+        if len(_x) > 13:
+            _d13 = float(ps.iloc[-1] - ps.iloc[-14])
+            _lfc["band"] = {"x0": _x[-14], "x1": _x[-1], "label": "13w {:+.0f}".format(_d13)}
+        LPI_FACTOR_CHARTS.append(_lfc)
         lpi_change[k] = {
             "wow": (float(ps.iloc[-1] - ps.iloc[-2]) if len(ps) >= 2 else float("nan")),
             "w13": (float(ps.iloc[-1] - ps.iloc[-14]) if len(ps) >= 14 else float("nan")),
@@ -1360,7 +1370,7 @@ for k in lpi_order:
         ch = lpi_change.get(k, {})
         chip_line = ('<div class="fx-chips">wow ' + _chg_chip(ch.get("wow", float("nan")))
                      + ' &middot; 13w ' + _chg_chip(ch.get("w13", float("nan"))) + '</div>')
-        spark_line = '<div class="fx-spark" id="spark-' + k + '"></div>'
+        spark_line = '<div class="mc-chart lf-chart mfd-chart" id="lfc-' + k + '" data-testid="lfc-' + k + '"></div>'
         en, cn = factor_commentary(k, v, d, LPI_RAW_TXT[k])
         cmt_line = '<div class="fx-cmt">' + en + ' <span class="fx-cmt-cn">' + cn + '</span></div>'
     else:
@@ -1378,10 +1388,10 @@ for k in lpi_order:
         + '<div class="lpi-factor-top"><span class="lpi-factor-lbl">' + lbl + '</span>'
         + '<span class="lpi-factor-val" style="color:' + bcol + '">' + vtxt + arr + '</span></div>'
         + raw_line
-        + '<div class="lpi-track"><div class="lpi-fill" style="width:' + wpct + '%;background:' + bcol + '"></div></div>'
-        + chip_line
         + spark_line
-        + cmt_line
+        + '<div class="mc-foot"><div class="lpi-track"><div class="lpi-fill" style="width:' + wpct + '%;background:' + bcol + '"></div></div>'
+        + chip_line
+        + cmt_line + '</div>'
         + amp_badge
         + '</div>')
 
@@ -1600,15 +1610,38 @@ def _metric_details(title, definition, why, read, source, cadence, limitation, m
             + '<br><b>Cadence:</b> ' + cadence + ' · <b>Observation:</b> ' + obs
             + ' · <b>Fetched:</b> ' + fetched + '<br><b>Limitations:</b> ' + limitation + '</div></details>')
 
-def _fast_card(title, value, sub, metric, status="normal", details=""):
+FAST_CHARTS = []   # per-card time series for the compact cards (drawn by the shared MFD drawer)
+
+
+def _fast_chart(cid, unit, traces, refs=None, band=None):
+    """Register a chart for a compact card. traces: [(name, color, dates, values, type)]."""
+    tr = []
+    for name, color, dates, vals, kind in traces:
+        pts = [(d, v) for d, v in zip(dates, vals) if v is not None and v == v]
+        if len(pts) < 3:
+            continue
+        tr.append({"name": name, "color": color, "type": kind, "x": [d for d, _ in pts], "y": [v for _, v in pts]})
+    if not tr:
+        return ""
+    ch = {"id": cid, "unit": unit, "traces": tr, "refs": refs or [], "default_range": "1Y", "mini": True}
+    if band and len(tr[0]["x"]) > band[0]:
+        ch["band"] = {"x0": tr[0]["x"][-band[0] - 1], "x1": tr[0]["x"][-1], "label": band[1]}
+    FAST_CHARTS.append(ch)
+    return cid
+
+
+def _fast_card(title, value, sub, metric, status="normal", details="", chart_id="", chg=""):
+    """Compact card, chart first: title and value, then the chart, then the text."""
     live = _fast_live(metric)
     cls = "gray" if not live else status
     shown = value if live else "—"
     detail = sub if live else "Last observation " + (_fast_fresh(metric).get("observation_date") or "unavailable") + "; not rendered as current."
+    chart = ('<div id="' + chart_id + '" class="mc-chart mfd-chart" data-testid="' + chart_id + '"></div>') if (live and chart_id) else ""
     return ('<div class="fast-card ' + cls + '"><div class="fast-card-top"><span>' + title + '</span>'
             + '<span class="fast-status ' + cls + '">' + (status.upper() if live else "STALE") + '</span></div>'
-            + '<div class="fast-value">' + shown + '</div><div class="fast-sub">' + detail + '</div>'
-            + '<div class="fast-stamp">' + _fast_stamp(metric) + '</div>' + details + '</div>')
+            + '<div class="fast-value">' + shown + (('<span class="mc-chg flat">' + chg + '</span>') if (live and chg) else '') + '</div>'
+            + chart + '<div class="mc-foot"><div class="fast-sub">' + detail + '</div>'
+            + '<div class="fast-stamp">' + _fast_stamp(metric) + '</div>' + details + '</div></div>')
 
 # Layer 1: reserves / GDP
 reserves = fast.get("reserves", {})
@@ -1896,6 +1929,10 @@ fp_details = (
 conc = fast.get("concentration", {})
 conc_value = ("{:.2f}% / {:.2f}%".format(conc.get("top10", 0), conc.get("top5", 0)) if _fast_live(conc) else "—")
 conc_sub = ("Top-10 / Top-5 · {} locally archived daily snapshot(s)".format(conc.get("history_days", 0)) if _fast_live(conc) else "")
+_ch = conc.get("history") or []
+conc_chart = _fast_chart("fcc-conc", "pct", [
+    ("Top-10 weight", "#a5b4fc", [h.get("date") for h in _ch], [h.get("top10") for h in _ch], "scatter"),
+    ("Top-5 weight", "#38bdf8", [h.get("date") for h in _ch], [h.get("top5") for h in _ch], "scatter")])
 conc_details = _metric_details("S&P 500 concentration", "Sum of the ten and five largest weights in the official SPY daily holdings file.",
     "Concentration increases the index's dependence on a small group of securities.",
     "Top-10 / Top-5 are observations. Percentile alerts stay disabled until the locally archived series has sufficient history.",
@@ -1916,6 +1953,10 @@ for _name in ("HY", "IG", "BBB"):
 ai = fast.get("ai", {})
 ai_value = ("{:.0f}% / {:.0f}%".format(ai.get("above50", 0), ai.get("above200", 0)) if _fast_live(ai) else "—")
 ai_sub = ("above 50d / 200d MAs · {}/{} fixed constituents available".format(ai.get("constituent_count", 0), len(fm.AI_BASKET)) if _fast_live(ai) else "")
+ai_chart = _fast_chart("fcc-ai", "pct", [
+    ("% above 50d MA", "#f59e0b", ai.get("breadth_dates", []), ai.get("breadth50_history", []), "scatter"),
+    ("% above 200d MA", "#a5b4fc", ai.get("breadth_dates", []), ai.get("breadth200_history", []), "scatter")],
+    refs=[{"y": 50, "label": "50%", "color": "#64748b"}])
 ai_details = _metric_details("AI basket breadth", "Percent of the fixed documented basket above its 50-day and 200-day moving average.",
     "Breadth shows whether leadership is broadening or narrowing inside the selected AI supply-chain basket.",
     "Read 50d / 200d together with semiconductor relative strength; the basket is fixed to limit drift.",
@@ -1928,7 +1969,12 @@ for _etf, _d in ai.get("rs", {}).items():
     _details = _metric_details(_etf + " / SPY relative strength", "Adjusted-close ratio of " + _etf + " to SPY, with 50-day and 200-day moving averages.",
         "Shows whether semiconductor leadership is outperforming the broad market.", "A ratio below a declining 200-day average is a transmission/leadership warning, not a directional call.",
         "https://finance.yahoo.com/", "daily business day", "ETF composition changes can create structural breaks; the ETF is a benchmark, not a basket constituent.", _metric)
-    rs_cards += _fast_card(_etf + " / SPY", _value, _sub, _metric, "normal", _details)
+    _rd, _rv = _d.get("dates", []), _d.get("history", [])
+    _ma50 = pd.Series(_rv, dtype=float).rolling(50).mean().round(6).tolist() if _rv else []
+    _rs_chart = _fast_chart("fcc-rs-" + _etf.lower(), "ratio", [
+        (_etf + " / SPY", "#38bdf8", _rd, _rv, "scatter"), ("50d average", "#64748b", _rd, _ma50, "scatter")], band=(60, "60d"))
+    _chg = ("{} 60d {:+.1f}%".format("▲" if _d.get("change60", 0) >= 0 else "▼", _d.get("change60", 0) * 100)) if _rv else ""
+    rs_cards += _fast_card(_etf + " / SPY", _value, _sub, _metric, "normal", _details, _rs_chart, _chg)
 
 j_sofr_spread = json.dumps({
     "dates": sofr_spread.get("dates", []), "raw": sofr_spread.get("raw_bp", []),
@@ -2300,7 +2346,7 @@ parts.append('.fx-raw b{color:#e2e8f0;font-size:13px}')
 parts.append('.fx-unit{font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.03em}')
 parts.append('.fx-chips{font-size:12px;color:#94a3b8;margin:8px 0 2px}')
 parts.append('.fx-chg{font-weight:700;font-size:12px}')
-parts.append('.fx-spark{width:100%;height:40px;margin:2px 0}')
+parts.append('.fx-spark{width:100%;height:40px;margin:2px 0}.lf-chart{height:170px}')
 parts.append('.fx-cmt{font-size:12px;color:#94a3b8;line-height:1.45;margin-top:6px}')
 parts.append('.fx-cmt-cn{color:#94a3b8}')
 parts.append('.regime-clock{width:100%;height:210px}')
@@ -2351,8 +2397,8 @@ parts.append('.gex-section{margin:0 20px 16px}')
 parts.append('.gex-heading{font-size:13px;font-weight:700;color:#e2e8f0;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}')
 parts.append('.gex-heading span{color:#6366f1}')
 parts.append('.gex-note-box{background:#141720;border:1px solid #2d3748;border-radius:8px;padding:14px 16px;font-size:12px;color:#94a3b8}')
-parts.append('.gex-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}')
-parts.append('@media(max-width:900px){.gex-cards{grid-template-columns:repeat(2,1fr)}}')
+parts.append('.gex-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}')
+
 parts.append('@media(max-width:480px){.gex-cards{grid-template-columns:1fr}}')
 parts.append('.gex-card{background:#141720;border:1px solid #2d3748;border-radius:10px;padding:13px 15px}')
 parts.append('.gex-card.green{border-left:3px solid #10b981}.gex-card.red{border-left:3px solid #ef4444}.gex-card.gray{border-left:3px solid #64748b}')
@@ -2455,9 +2501,7 @@ if _fast_live(reserves) and reserves.get("history"):
         "refs": [{"y": round(float(_rh.quantile(0.20)), 2), "label": "20th pctile (warning)", "color": "#f59e0b"},
                  {"y": round(float(_rh.quantile(0.10)), 2), "label": "10th pctile (elevated)", "color": "#ef4444"}]})
     _res_chart_id = "mcc-resgdp"
-_res_card = _fast_card('Reserves / GDP', res_value, res_sub, reserves, res_status, res_details)
-if _res_chart_id:
-    _res_card = _res_card.replace('<div class="fast-stamp">', '<div id="mcc-resgdp" class="mc-chart mfd-chart" data-testid="mcc-resgdp"></div><div class="fast-stamp">', 1)
+_res_card = _fast_card('Reserves / GDP', res_value, res_sub, reserves, res_status, res_details, _res_chart_id)
 parts.append('<div class="fast-grid">' + _res_card + '</div>')
 
 _blk("funding")
@@ -2476,7 +2520,25 @@ parts.append('<div class="fp-header">'
              + '<div class="fp-freshness">Observations: ' + fp_obs + ' &middot; fetched '
              + fast.get("fetched_at", now_str) + '</div>'
              + '</div></div>')
-parts.append('<div class="fp-overlay-note">' + FP_STRATEGY_NOTE + '</div>')
+# Aligned small multiples: one panel per series, each with its own units and
+# threshold shading.  No dual or triple axes.
+parts.append('<div class="chart-subtitle">Three aligned panels share one x-axis and one range control. '
+             + '<button class="sofr-range" data-range="3M">3M</button> <button class="sofr-range active" data-range="6M">6M</button> '
+             + '<button class="sofr-range" data-range="1Y">1Y</button> <button class="sofr-range" data-range="3Y">3Y</button></div>')
+parts.append('<div class="fp-charts">')
+parts.append('<div class="fp-chart-head"><b>A. Funding price</b> <span>SOFR \u2212 IORB, basis points \u00b7 '
+             'raw muted, filtered non-calendar 5-observation median emphasized, hollow markers = calendar noise</span></div>')
+parts.append('<div id="chart-sofr-iorb" class="fp-chart sofr-chart"></div>')
+parts.append('<details class="fp-expand"><summary>Show daily change bars (\u0394 bp/day)</summary>'
+             '<div id="chart-sofr-change" class="sofr-change-chart"></div></details>')
+parts.append('<div class="fp-chart-head"><b>B. Liquidity buffer</b> <span>bank reserve balances, $ trillions \u00b7 '
+             '$2.90T / $2.80T reference band, 4-week slope cue</span></div>')
+parts.append('<div id="chart-fp-reserves" class="fp-chart"></div>')
+parts.append('<div class="fp-chart-head"><b>C. Fiscal drain</b> <span>Treasury General Account, $ trillions \u00b7 '
+             '$0.90T watch / $1.00T threshold, 4-week slope cue</span></div>')
+parts.append('<div id="chart-fp-tga" class="fp-chart"></div>')
+parts.append('</div>')
+
 parts.append('<div class="fp-cards">' + fp_card_sofr + fp_card_res + fp_card_tga + '</div>')
 
 # Pressure path: explicit causality, arrows and words rather than decoration.
@@ -2497,25 +2559,7 @@ _path += ('</div><div class="fp-path-caption"><b>Direction.</b> A rebuilding TGA
           'strategy overlay treats as resonance.</div></div>')
 parts.append(_path)
 
-# Aligned small multiples: one panel per series, each with its own units and
-# threshold shading.  No dual or triple axes.
-parts.append('<div class="chart-subtitle">Three aligned panels share one x-axis and one range control. '
-             + '<button class="sofr-range" data-range="3M">3M</button> <button class="sofr-range active" data-range="6M">6M</button> '
-             + '<button class="sofr-range" data-range="1Y">1Y</button> <button class="sofr-range" data-range="3Y">3Y</button></div>')
-parts.append('<div class="fp-charts">')
-parts.append('<div class="fp-chart-head"><b>A. Funding price</b> <span>SOFR \u2212 IORB, basis points \u00b7 '
-             'raw muted, filtered non-calendar 5-observation median emphasized, hollow markers = calendar noise</span></div>')
-parts.append('<div id="chart-sofr-iorb" class="fp-chart sofr-chart"></div>')
-parts.append('<details class="fp-expand"><summary>Show daily change bars (\u0394 bp/day)</summary>'
-             '<div id="chart-sofr-change" class="sofr-change-chart"></div></details>')
-parts.append('<div class="fp-chart-head"><b>B. Liquidity buffer</b> <span>bank reserve balances, $ trillions \u00b7 '
-             '$2.90T / $2.80T reference band, 4-week slope cue</span></div>')
-parts.append('<div id="chart-fp-reserves" class="fp-chart"></div>')
-parts.append('<div class="fp-chart-head"><b>C. Fiscal drain</b> <span>Treasury General Account, $ trillions \u00b7 '
-             '$0.90T watch / $1.00T threshold, 4-week slope cue</span></div>')
-parts.append('<div id="chart-fp-tga" class="fp-chart"></div>')
-parts.append('</div>')
-
+parts.append('<div class="fp-overlay-note">' + FP_STRATEGY_NOTE + '</div>')
 parts.append('<div class="read-guide"><b>Read guide.</b> <b>0/3</b> normal, no resonance. <b>1/3</b> watch \u2014 a '
              'single leg is common and is not a fragility signal. <b>2/3</b> yellow warning \u2014 funding pressure '
              'building. <b>3/3</b> structural-top risk signal \u2014 fragility <i>confirmation</i>, explicitly not a '
@@ -2649,7 +2693,7 @@ parts.append('<div class="layer-header">第三层 · 拥挤度 Crowding <span>co
              + '<span class="tf">weeks</span></div>')
 _blk("conc")
 parts.append('<div class="fast-grid">' + _fast_card('S&amp;P 500 concentration', conc_value, conc_sub, conc,
-             conc.get('status', 'normal'), conc_details) + '</div>')
+             conc.get('status', 'normal'), conc_details, conc_chart) + '</div>')
 _blk("cot")
 parts.append('<div class="' + fresh_cls + '">COT ' + fresh_txt + '</div>')
 
@@ -2696,7 +2740,7 @@ parts.append('</div>')
 # ===================== AMPLIFIERS & TRIGGERS =====================
 _blk("ai")
 parts.append('<div class="gex-heading" style="margin-top:12px">AI leadership &amp; semiconductor relative strength <span>fast variables · fixed basket</span></div>')
-parts.append('<div class="fast-grid">' + _fast_card('AI basket breadth', ai_value, ai_sub, ai, 'normal', ai_details) + rs_cards + '</div>')
+parts.append('<div class="fast-grid">' + _fast_card('AI basket breadth', ai_value, ai_sub, ai, 'normal', ai_details, ai_chart) + rs_cards + '</div>')
 
 _blk("l4_hdr")
 parts.append('<div class="layer-header">第四层 · 放大器与触发器 Amplifiers &amp; Triggers '
@@ -2755,6 +2799,18 @@ parts.append('</div>')
 
 _blk("gex")
 # Homebrew Index GEX section (SPY + QQQ)
+GEX_HIST_CHARTS = []
+for _sym in HOMEBREW_GEX_SYMBOLS:
+    _sn = hgex_state.get(_sym, {})
+    _ds = sorted(d for d, v in _sn.items() if v.get("net_gex") is not None)
+    if len(_ds) >= 3:
+        _vals = [round(float(_sn[d]["net_gex"]), 2) for d in _ds]
+        GEX_HIST_CHARTS.append({"id": "gxc-" + _sym.lower(), "unit": "gex", "default_range": "1Y", "mini": True,
+                                "traces": [{"name": _sym + " net GEX", "color": "#ef4444" if _vals[-1] < 0 else "#10b981", "type": "bar", "x": _ds, "y": _vals,
+                                            "colors": ["#ef4444" if v < 0 else "#10b981" for v in _vals]}],
+                                "refs": [{"y": 0, "label": "0 = gamma neutral", "color": "#64748b"}]})
+
+
 def _hgex_card(sym):
     res = hgex_results.get(sym, {})
     if not res.get("ok"):
@@ -2772,8 +2828,10 @@ def _hgex_card(sym):
     q.append('<div class="gex-card-head"><span class="gex-card-sym">' + sym + '</span>' + fresh + '</div>')
     q.append('<div class="gex-card-val ' + cls + '">' + _fmt_bn(ng)
              + ' <span style="font-size:12px;color:#94a3b8">$bn/1%</span></div>')
-    q.append('<div class="gex-card-lbl">net GEX &middot; '
-             + ('positive — dealers dampen vol' if pos else 'negative — dealers amplify') + '</div>')
+    if any(c["id"] == "gxc-" + sym.lower() for c in GEX_HIST_CHARTS):
+        q.append('<div class="mc-chart mfd-chart" id="gxc-' + sym.lower() + '" data-testid="gxc-' + sym.lower() + '"></div>')
+    q.append('<div class="mc-foot"><div class="gex-card-lbl">net GEX &middot; '
+             + ('positive — dealers dampen vol' if pos else 'negative — dealers amplify') + ' &middot; daily snapshots, $bn per 1% move</div>')
     if flip and spot:
         pctd = (spot - flip) / flip * 100.0
         dcls = "green" if pctd >= 0 else "red"
@@ -2803,7 +2861,7 @@ def _hgex_card(sym):
     else:
         q.append('<div class="gex-card-note" style="color:#94a3b8">accumulating history ('
                  + str(nd) + '/' + str(HGEX_PCTILE_MIN_DAYS) + ' days)</div>')
-    q.append('</div>')
+    q.append('</div></div>')
     return "".join(q)
 
 parts.append('<div class="gex-section">')
@@ -3095,7 +3153,8 @@ parts.append('}')
 _mfd_charts = {"funding": fred_mod["funding"]["charts"] + fred_mod["funding"]["card_charts"],
                "fedbs": fred_mod["fedbs"]["charts"] + ([fred_mod["fedbs"]["comp_chart"]] if fred_mod["fedbs"].get("comp_chart") else []) + fred_mod["fedbs"]["card_charts"],
                "credit": fred_mod["credit"]["charts"] + fred_mod["credit"]["card_charts"],
-               "rates": fred_mod["rates"]["charts"] + fred_mod["rates"]["card_charts"]}
+               "rates": fred_mod["rates"]["charts"] + fred_mod["rates"]["card_charts"],
+               "crowding": FAST_CHARTS + LPI_FACTOR_CHARTS + GEX_HIST_CHARTS}
 parts.append(fred_render.js_for(_mfd_charts))
 parts.append('window.addEventListener("resize",function(){')
 parts.append('  ["chart-vix","chart-vix-term","chart-cot","chart-corr","chart-lpi","chart-lpi-full","chart-hgex-spy"].concat(sfrIds).concat(cotChartIds).concat(sparkIds).concat(clkIds).concat(tailIds).concat(scIds).forEach(function(id){var el=document.getElementById(id);if(el)Plotly.Plots.resize(el);});')

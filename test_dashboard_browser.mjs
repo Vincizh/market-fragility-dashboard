@@ -339,6 +339,23 @@ try {
         resGdp: !!document.querySelector('[data-testid="mcc-resgdp"] .main-svg'),
       };
     });
+    await page.evaluate(() => document.querySelectorAll('details.metric-details, details.fp-expand').forEach((d) => { d.open = false; }));
+    const order = await page.evaluate(() => {
+      const cards = [...document.querySelectorAll('.mc, .fast-card, .lpi-factor, .gex-card')].filter((c) => c.querySelector('.mc-chart'));
+      const bad = cards.filter((c) => {
+        const ch = c.querySelector('.mc-chart').getBoundingClientRect();
+        const foot = c.querySelector('.mc-foot');
+        return !foot || foot.getBoundingClientRect().top < ch.bottom - 1;
+      }).map((c) => c.getAttribute('data-testid') || c.className);
+      const share = cards.map((c) => c.querySelector('.mc-chart').clientHeight / c.clientHeight);
+      const hy = document.querySelector('[data-testid="mc-oas-hy"]');
+      return { n: cards.length, bad, minShare: Math.min(...share), hyChg: hy ? (hy.querySelector('.mc-chg') || {}).textContent || '' : '',
+               fast: ['fcc-conc', 'fcc-ai', 'fcc-rs-smh', 'fcc-rs-soxx', 'mcc-resgdp', 'lfc-short_rate', 'gxc-spy'].filter((id) => !document.querySelector(`#${id} .main-svg`)) };
+    });
+    check(`${tag} chart sits above the text on every chart card`, order.n >= 40 && order.bad.length === 0, `n=${order.n} bad=${order.bad.slice(0, 5).join(',')}`);
+    check(`${tag} chart takes at least 40% of each card`, order.minShare >= 0.4, order.minShare.toFixed(2));
+    check(`${tag} HY OAS shows its 20d change next to the value`, /20d \+?-?\d+ bp/.test(order.hyChg), order.hyChg);
+    check(`${tag} compact, LPI factor and GEX cards draw their charts`, order.fast.length === 0, order.fast.join(','));
     check(`${tag} at least 30 metric cards`, mcs.total >= 30, String(mcs.total));
     check(`${tag} every live metric card has a chart`, mcs.noChart.length === 0, mcs.noChart.join(','));
     check(`${tag} every metric chart is drawn with width`, mcs.undrawn.length === 0, mcs.undrawn.join(','));

@@ -33,7 +33,9 @@ CSS = (
     ".mc-value{font-size:24px;font-weight:700;color:var(--text);line-height:1.1;font-variant-numeric:tabular-nums}"
     ".mc.st-na .mc-value{color:var(--faint)}"
     ".mc-spark{flex:0 0 auto}.mc-spark svg{display:block}"
-    ".mc-chart{width:100%;height:190px;margin-top:6px}"
+    ".mc-chart{width:100%;height:230px;margin-top:4px}"
+    ".mc-chg{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:10px}.mc-chg.up{color:var(--elev)}.mc-chg.down{color:var(--ok)}.mc-chg.flat{color:var(--muted)}"
+    ".mc-foot{border-top:1px solid #1e2433;margin-top:6px;padding-top:6px}"
     ".mc-facts{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45}"
     ".mc-nochart{font-size:12px;color:var(--faint);padding:14px 0}"
     ".mc-sub{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.45}"
@@ -54,7 +56,7 @@ CSS = (
     ".mod-note{font-size:12px;color:var(--faint);line-height:1.5;margin:6px 0 12px}"
     ".mod-note a,.mod-intro a{color:#a5b4fc}"
     "@media(max-width:900px){.mc-grid,.mc-grid.cols-4{grid-template-columns:repeat(2,minmax(0,1fr))}.mod-charts{grid-template-columns:minmax(0,1fr)}}"
-    "@media(max-width:640px){.mc-grid,.mc-grid.cols-2,.mc-grid.cols-4{grid-template-columns:minmax(0,1fr)}.mod-chart .mfd-chart{height:260px}.mc-value{font-size:22px}.mc{padding:11px 12px}.mc-chart{height:170px}}"
+    "@media(max-width:640px){.mc-grid,.mc-grid.cols-2,.mc-grid.cols-4{grid-template-columns:minmax(0,1fr)}.mod-chart .mfd-chart{height:260px}.mc-value{font-size:22px}.mc{padding:11px 12px}.mc-chart{height:200px}}"
 )
 
 
@@ -104,11 +106,12 @@ def card_html(c: dict[str, Any]) -> str:
         body = '<div class="mc-nochart">No time series available for this indicator.</div>'
     return ('<div class="mc {cls}" data-testid="mc-{cid}"><div class="mc-top"><div class="mc-title">{title}</div>'
             '<span class="mc-badge {cls}">{badge}</span></div>'
-            '<div class="mc-main"><div class="mc-value">{value}</div></div>'
-            '<div class="mc-facts">{sub}</div>{body}'
+            '<div class="mc-main"><div class="mc-value">{value}{chg}</div></div>'
+            '{body}<div class="mc-foot"><div class="mc-facts">{sub}</div>'
             '<div class="mc-stamp">As of {asof}{cad}</div>'
-            '<details class="metric-details"><summary>About this indicator 说明</summary><div>{det}</div></details></div>').format(
+            '<details class="metric-details"><summary>About this indicator 说明</summary><div>{det}</div></details></div></div>').format(
         cls=cls, cid=e(c["id"]), title=e(c["title"]), badge=badge, value=e(c["value"]), sub=sub, body=body, asof=e(c["asof"]),
+        chg=('<span class="mc-chg {}" style="color:{}">{}</span>'.format(e(c["chg_dir"]), e(c.get("chg_color", "")), e(c["chg_txt"])) if c.get("chg_txt") and not stale else ""),
         cad=(" · " + e(c["cadence"].split(" (")[0])) if c.get("cadence") else "", det="<br>".join(det))
 
 
@@ -152,24 +155,30 @@ var MFD_LAYOUT={paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",font:
 var MFD_RANGE_MONTHS={"3M":3,"6M":6,"1Y":12,"3Y":36};
 function mfdFmt(v,unit){if(v===null||v===undefined||isNaN(v))return "";
   if(unit==="pct")return v.toFixed(2)+"%";if(unit==="bp")return Math.round(v).toLocaleString()+" bp";
-  if(unit==="pp")return v.toFixed(2)+" pp";if(unit==="$B")return "$"+(v<10?v.toFixed(1):Math.round(v).toLocaleString())+"B";if(unit==="$T")return "$"+v.toFixed(2)+"T";return v.toFixed(2);}
+  if(unit==="pp")return v.toFixed(2)+" pp";if(unit==="score")return Math.round(v)+"";if(unit==="gex")return (v>=0?"+":"")+v.toFixed(2)+"bn";if(unit==="ratio")return v.toFixed(3);if(unit==="$B")return "$"+(v<10?v.toFixed(1):Math.round(v).toLocaleString())+"B";if(unit==="$T")return "$"+v.toFixed(2)+"T";return v.toFixed(2);}
 function mfdRangeFor(c,label){
   var last=null;c.traces.forEach(function(t){if(t.x.length){var d=t.x[t.x.length-1];if(!last||d>last)last=d;}});
   if(!last||label==="Max")return null;
   var d=new Date(last+"T00:00:00Z");d.setUTCMonth(d.getUTCMonth()-MFD_RANGE_MONTHS[label]);
+  var first=null;c.traces.forEach(function(t){if(t.x.length&&(!first||t.x[0]<first))first=t.x[0];});
+  if(first){var f=new Date(first+"T00:00:00Z");f.setUTCDate(f.getUTCDate()-2);if(f>d)d=f;}
   var end=new Date(last+"T00:00:00Z");end.setUTCDate(end.getUTCDate()+3);
   return [d.toISOString().slice(0,10),end.toISOString().slice(0,10)];}
 function mfdDraw(c,label){
   var el=document.getElementById(c.id);if(!el||typeof Plotly==="undefined")return;
   var traces=c.traces.map(function(t){
     var o={x:t.x,y:t.y,name:t.name,hovertemplate:"%{y:,.2f}"};
-    if(t.type==="bar"){o.type="bar";o.marker={color:t.color};}
-    else{o.type="scatter";o.mode="lines";o.line={color:t.color,width:2};if(c.stacked){o.stackgroup="one";o.fillcolor=t.color+"55";}}
+    if(t.type==="bar"){o.type="bar";o.marker={color:t.colors||t.color};}
+    else{o.type="scatter";o.mode="lines";o.line={color:t.color,width:c.mini?2.6:2};if(c.stacked){o.stackgroup="one";o.fillcolor=t.color+"55";}}
     return o;});
+  if(c.mini&&c.traces[0].type!=="bar"&&c.traces[0].x.length){var t0=c.traces[0],li=t0.x.length-1;
+    traces.push({x:[t0.x[li]],y:[t0.y[li]],type:"scatter",mode:"markers",marker:{color:t0.color,size:8,line:{color:"#0d0f14",width:1.5}},showlegend:false,hoverinfo:"skip"});}
   var shapes=[],ann=[];
   (c.refs||[]).forEach(function(r){
     shapes.push({type:"line",xref:"paper",x0:0,x1:1,yref:"y",y0:r.y,y1:r.y,line:{color:r.color,width:1,dash:"dot"}});
     ann.push({xref:"paper",x:(c.traces[0].type==="bar"?0.99:0.01),xanchor:(c.traces[0].type==="bar"?"right":"left"),yref:"y",y:r.y,yanchor:"bottom",text:r.label,showarrow:false,font:{size:10,color:r.color}});});
+  if(c.band){shapes.push({type:"rect",xref:"x",x0:c.band.x0,x1:c.band.x1,yref:"paper",y0:0,y1:1,fillcolor:"rgba(148,163,184,0.13)",line:{width:0},layer:"below"});
+    ann.push({xref:"x",x:c.band.x0,xanchor:"right",yref:"paper",y:1,yanchor:"top",text:c.band.label,showarrow:false,font:{size:11,color:"#cbd5e1"},xshift:-3});}
   (c.vlines||[]).forEach(function(v){
     shapes.push({type:"line",xref:"x",x0:v.x,x1:v.x,yref:"paper",y0:0,y1:1,line:{color:"#a5b4fc",width:1,dash:"dash"}});
     ann.push({xref:"x",x:v.x,xanchor:"left",yref:"paper",y:1,yanchor:"top",text:v.label,showarrow:false,font:{size:10,color:"#a5b4fc"}});});
