@@ -168,6 +168,7 @@ def build_funding(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
         cards[-1]["_chart"] = dict(traces=[_tr("EFFR minus IORB", "STATE", _window(sp, 3), digits=0)], unit="bp",
                                    refs=[{"y": 0, "label": "IORB", "color": REF_RED},
                                          {"y": -7, "label": "-7 bp (2023-25 norm)", "color": REF_GREY}])
+        cards[-1]["num"], cards[-1]["num_chg20"] = v, c20
     else:
         cards.append(_na_card("effr-iorb", "EFFR minus IORB · 联邦基金利率减 IORB (银行间)", ["EFFR", "IORB"], "Interbank overnight rate against IORB."))
     # BGCR - IORB
@@ -191,6 +192,7 @@ def build_funding(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
             spark=mon.spark(sp, 20), rule="Watch at or above +3.0 bp, elevated at or above +5.0 bp (the SOFR strategy lines)."))
         cards[-1]["_chart"] = dict(traces=[_tr("BGCR minus IORB", "STATE", _window(sp, 3), digits=0)], unit="bp",
                                    refs=[{"y": 0, "label": "IORB", "color": REF_GREY}, {"y": 3, "label": "+3 bp", "color": REF_AMBER}])
+        cards[-1]["num"], cards[-1]["num_med5"] = v, float(sp.tail(5).median())
     else:
         cards.append(_na_card("bgcr-iorb", "BGCR minus IORB · 广义一般担保回购减 IORB", ["BGCR", "IORB"], "Broad general collateral repo rate against IORB."))
     # SOFR - EFFR: secured minus unsecured in one number
@@ -229,6 +231,7 @@ def build_funding(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
             why="Tri-party repo has no bilateral dealer-balance-sheet noise, so a persistent premium to IORB points to collateral-financing pressure rather than sponsored-repo mix.",
             limits="Not calendar-filtered: month-end and Treasury settlement dates print higher. Context only, outside the funding resonance count.",
             spark=mon.spark(sp, 20), rule="Watch at or above +3.0 bp, elevated at or above +5.0 bp (the SOFR strategy lines)."))
+        cards[-1]["num"], cards[-1]["num_med5"] = v, float(sp.tail(5).median())
     else:
         cards.append(_na_card("tgcr-iorb", "TGCR minus IORB · 三方回购利率减 IORB", ["TGCRRATE", "IORB"], "Tri-party repo rate against IORB."))
     # SOFR 99th minus median
@@ -248,6 +251,7 @@ def build_funding(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
             why="Measures how far the most expensive overnight repo trades sit above the typical trade. It reflects the dispersion of rates paid by balance-sheet-constrained borrowers.",
             limits="A statistic of the rate distribution. It does not identify which participants borrow at the tail.",
             spark=mon.spark(sp, 20), rule="Percentile of own 2y history plus 5-observation change z (see methodology)."))
+        cards[-1]["num"] = float(sp.iloc[-1])
     else:
         cards.append(_na_card("sofr-disp", "SOFR 99th percentile minus median · SOFR 第99分位减中位数", ["SOFR99", "SOFR"], "Upper-tail repo rate dispersion."))
     # SOFR volume
@@ -302,6 +306,7 @@ def build_funding(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
             limits="Floors are operator-set heuristics (decision D3), not empirical laws. Small residual balances can sit below the floor without meaning.",
             spark=mon.spark(ser, 13), rule="quiet below the floor, in use at or above it, elevated when also at or above the 3y 95th percentile.")
         card["backstop"] = r["state"]
+        card["num"] = r["value"]
         backs.append(card)
     # Foreign official RRP pool: liability, no state
     fr = _get(S, "WLRRAFOIAL")

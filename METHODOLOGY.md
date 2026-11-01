@@ -8,7 +8,7 @@ All Phase A/B metrics use a visible observation date, fetch time, cadence, and s
 
 ## Page structure
 
-Four layers: fragility (LPI), conditions (funding, Fed balance sheet, credit, rates), crowding, amplifiers and triggers. Each indicator state uses the same five labels: normal, watch, elevated, stress, and context (plotted, no state). States are percentile-based against the series' own trailing history. Fixed levels, where shown, are labelled operator reference lines and do not drive a state. The scorecard maps each layer to one of these labels; it does not combine layers into a composite score.
+Four layers: fragility (LPI), conditions (funding, Fed balance sheet, credit, rates), crowding, amplifiers and triggers. Each indicator state uses the same five labels: normal, watch, elevated, stress, and context (plotted, no state). States are percentile-based against the series' own trailing history. Fixed levels, where shown, are labelled operator reference lines and do not drive a state. The overview replaces the old six-tile scorecard with the fragility chain described below. Section badges use breadth: one indicator at watch or worse caps the badge at watch, two cap it at elevated, and three or more allow the worst state.
 
 ## L1 · Funding & Liquidity
 
@@ -53,7 +53,7 @@ Four layers: fragility (LPI), conditions (funding, Fed balance sheet, credit, ra
 |---|---|---|---|
 | Short rate | FRED SOFR (DFF before 2018) | NY Fed SOFR median | Weekly W-WED last value |
 | Net liquidity | FRED WALCL − WTREGEN − RRPONTSYD | H.4.1 total assets and weekly-average TGA; NY Fed overnight RRP | One interior gap may be carried; no carry past the last print |
-| Duration supply | Treasury auctions query | none | Auctions dated after today are excluded |
+| Duration supply | Treasury auctions query (13-week sum of nominal and TIPS Notes and Bonds of 1.5 years or more, reopenings included, FRN excluded, `$B`) | TreasuryDirect auctioned-securities API for auctions not yet in FiscalData | Auctions dated after today are excluded; no weekly row past the last date a source covers |
 | Vol amplifier | Yahoo ^VIX | none | Weekly close |
 
 The composite is read on the common as-of week (minimum of each factor's last valid week). A common week older than 12 days is labelled stale; the page then shows the last-known value in gray and suppresses action language. Conditional tail statistics use the full weekly S&P 500 path for forward outcomes, and the columns report the frequency of a maximum drawdown larger than 5% or 10% within the horizon. COT chart percentiles are expanding (each week ranked only against data available that week); the z-score uses a trailing 156-week window.
@@ -61,6 +61,30 @@ The composite is read on the common as-of week (minimum of each factor's last va
 ## Freshness
 
 A daily business-day series is gray after four calendar days; the weekly reserves series is gray after ten calendar days. Every new card reports both the underlying observation date and the pipeline fetch time. FRED live reads retry, then use a committed cache of official FRED CSV responses only when necessary; freshness remains based on the observation date.
+
+## Fragility chain (v4)
+
+The chain asks whether pressure is moving in the usual order: thin backdrop, then repo strain, then reserve scarcity, then transmission to credit, rates and the dollar, then price amplification. An indicator is on, off or unavailable; unavailable indicators are excluded from the count, and a stale series is unavailable.
+
+| Stage | Indicators and on rule |
+|---|---|
+| 0 Backdrop | LPI ≥ 60 (weekly; unavailable when stale); basis-trade proxy ≥ 80; reserves leg active or elevated; reserves/GDP at warning or elevated |
+| 1 Repo strain | SOFR − IORB 5-day calendar-filtered median ≥ +3 bp; TGCR − IORB and BGCR − IORB 5-day medians ≥ +3 bp; SOFR 99th − median at watch or worse; 3m T-bill − SOFR at or above its 90th percentile |
+| 2 Reserve scarcity | EFFR − IORB ≥ −1 bp or a 20-day rise of 2 bp or more; standing repo facility in use (7-day sum ≥ $1B); discount window at or above its own 3-year 95th percentile with a positive 4-week change |
+| 3 Transmission | 20-day change z ≥ 1.5 for HY OAS, HY − IG and CCC − BB; 10Y realized volatility at or above its 5-year 80th percentile; broad dollar 20-day change z ≥ 1.5; financial CP − T-bill at or above its 90th percentile |
+| 4 Amplification | dealer gamma negative; VIX curve in backwardation; 2-week sector correlation ≥ 0.6 and above the 1-month value; SPY volume ≥ 1.5× its 20-day average on a down day |
+
+A stage is confirmed when two or more indicators are on, partial when one is on, quiet when none is on. Stage 2 has hard triggers that confirm it alone: EFFR at or above IORB, or standing repo usage above $1B and at or above its 3-year 95th percentile.
+
+Chain level: stage 1 confirmed gives watch; stage 2, 3 or 4 confirmed gives elevated; two or more of stages 2 to 4 confirmed gives stress. A confirmed backdrop raises the level by one step only while the level is below elevated. The stance sentence in the key takeaway comes from the chain level. The weekly LPI is shown as backdrop and no longer sets the stance.
+
+Every hourly production run compares the chain with the last stored run in `data/chain-state.json` and appends an event when the chain level, a stage status or the FSI band changes. An unavailable reading never creates an event and does not overwrite the last known value, so a data outage is not shown as relief.
+
+## Funding Stress Index (v4)
+
+Three daily spreads, each in basis points: repo = SOFR − IORB (5-observation median); interbank = EFFR − IORB; tail = SOFR 99th percentile − SOFR (5-observation median). IOER is the anchor before IORB began on 2021-07-29. Each spread is converted to a percentile of its trailing 1,260 observations (at least 250), using only past and current data, with ties at their mid-rank. The FSI is the mean of the available percentiles; at least two are required. Bands: below 60 normal, 60 to 80 watch, 80 to 95 elevated, 95 or more stress. The index is shown on the overview beside stages 1 and 2 and does not enter the chain level, the LPI or the de-leveraging tally.
+
+Backtest from 2019: September 2019 peak 100, March 2020 peak 97, October to November 2025 peak 90, March 2023 peak 37 (the bank failures were a deposit run, not a funding-price event), April 2025 peak 60. About 6% of days were at 80 or higher.
 
 ## Descriptive FRED indicators (v2)
 
@@ -71,7 +95,7 @@ These series feed the Conditions layer only. They do not enter the LPI, the de-l
 * The foreign official reverse repo pool is context only.
 * Weekly series are stale after their cadence plus a grace period (see `max_age_days` below). A stale series shows no state and is never forward-filled.
 * ICE BofA OAS series on FRED carry roughly three years of history, so percentiles for them use that window.
-* The What-changed panel rebuilds each indicator's state as of seven days earlier from the same series and lists differences, then adds the largest standardized one-week moves (z of the 5-observation change for daily series, 1-observation for weekly series, threshold |z| >= 1.5). Scorecard states are additionally compared with an embedded daily snapshot that is 5 to 10 days old; until one exists the panel says it is building history.
+* The What-changed panel rebuilds each indicator's state as of seven days earlier from the same series and lists differences, then adds the largest standardized one-week moves (z of the 5-observation change for daily series, 1-observation for weekly series, threshold |z| >= 1.5). Chain stages are additionally compared with an embedded daily snapshot that is 5 to 10 days old; until one exists the panel says it is building history.
 * Reserve-management purchases: the Federal Reserve announced the programme on 2025-12-10; see the [NY Fed operating policy statement](https://www.newyorkfed.org/markets/opolicy/operating_policy_251210a) and the [Federal Reserve press release](https://www.federalreserve.gov/newsevents/pressreleases/monetary20251210a1.htm). The dashboard shows the observed change in Treasury bills held (WSHOBL) and compares it with the average since the programme began.
 
 ### Liquidity calendar
@@ -84,7 +108,7 @@ Every source registers a name, provider, last observation date, cadence and stat
 
 ### Embedded state
 
-`hgex-state` stores up to 400 daily SPY/QQQ gamma snapshots; `dash-state` stores 45 daily scorecard snapshots. Both live inside `index.html` because the workflow commits only generated files. A locally generated `index.html` must not be committed over the hosted one.
+`hgex-state` stores up to 400 daily SPY/QQQ gamma snapshots; `dash-state` stores 45 daily snapshots of the chain level, each stage status and the FSI band. `data/chain-state.json` stores the latest run and up to 200 stage-change events; the production run writes it, the degraded test run does not. Both live inside `index.html` because the workflow commits only generated files. A locally generated `index.html` must not be committed over the hosted one.
 
 ### Secured repo versus interbank funding (v3)
 

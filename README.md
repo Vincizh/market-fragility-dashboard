@@ -2,12 +2,12 @@
 
 A public-data dashboard for **market fragility, not market direction**. The page is organised as a four-layer risk stack, read top to bottom:
 
-1. **Fragility** — the Liquidity Pressure Index (LPI) and its conditional tail table.
+1. **Backdrop** — the weekly Liquidity Pressure Index (LPI) and its conditional tail table. The LPI describes how thin the cushion is; it is not the headline signal.
 2. **Conditions** — funding and plumbing (SOFR, repo, reserves, TGA, standing facilities), the Fed balance sheet and reserve-management purchases, credit spreads, and rates and term premium.
 3. **Crowding** — S&P 500 concentration, AI leadership, CFTC positioning and the basis-trade proxy.
-4. **Amplifiers and triggers** — the de-leveraging bottom signals (VIX curve, crypto funding, CTA short covering, correlation) and dealer gamma.
+4. **Amplifiers and triggers** — market tape and dealer gamma. The de-leveraging conditions (VIX curve, crypto funding, CTA short covering, correlation) sit in a separate Recovery signals section, because they describe when a sell-off is ending rather than how fragile the market is.
 
-An overview scorecard, a what-changed panel and the key takeaway sit above the layers. A data-health chip in the header links to a table of every source with its last observation date and status.
+The overview shows a five-stage fragility chain, a daily Funding Stress Index, a stage-change log, the what-changed panel and the key takeaway above the layers. A data-health chip in the header links to a table of every source with its last observation date and status.
 
 **Live dashboard:** <https://vincizh.github.io/market-fragility-dashboard/>
 
@@ -17,7 +17,9 @@ The dashboard is deterministic and refreshes hourly through GitHub Actions. A mi
 
 | Layer | Module | Formula / display | Source and cadence |
 |---|---|---|---|
-| L1 | Liquidity Pressure Index | Causal weekly percentiles of short rate, coupon supply, net liquidity and VIX | FRED, FiscalData, Cboe/Yahoo market history; weekly / daily inputs |
+| – | Fragility chain | Five stages (backdrop, repo strain, reserve scarcity, transmission, amplification); a stage is confirmed when two indicators are on or a hard trigger fires | Inputs from the modules below; see [METHODOLOGY.md](METHODOLOGY.md#fragility-chain-v4) |
+| – | Funding Stress Index (FSI) | Daily mean of causal 5-year percentiles of SOFR − IORB (5d median), EFFR − IORB and SOFR 99th − SOFR (5d median); IOER before 2021-07-29 | [FRED SOFR, SOFR99, EFFR, IORB, IOER](https://fred.stlouisfed.org/series/SOFR) · daily |
+| L1 | Liquidity Pressure Index (backdrop) | Causal weekly percentiles of short rate, 13-week coupon supply, net liquidity and VIX | FRED, FiscalData, TreasuryDirect, Cboe/Yahoo market history; weekly / daily inputs |
 | 1 | LPI conditional tail table | Forward S&P 500 outcomes by LPI band; folded by default | Yahoo ^GSPC weekly |
 | 2 | Reserves / GDP | `WRESBAL / (GDP × 1,000)` with a rolling 156-week percentile; warning/elevated requires two weekly observations | [FRED WRESBAL](https://fred.stlouisfed.org/graph/fredgraph.csv?id=WRESBAL), [FRED GDP](https://fred.stlouisfed.org/graph/fredgraph.csv?id=GDP) |
 | 2 | NY Fed repo accepted | Daily accepted amount and trailing 7-calendar-day sum; persistence / own-history percentile, not a dollar threshold | [NY Fed Markets API](https://markets.newyorkfed.org/api/rp/repo/all/results/last/40.json) |
@@ -34,7 +36,7 @@ The dashboard is deterministic and refreshes hourly through GitHub Actions. A mi
 | 4 | Crypto funding, CTA and correlation | Crypto funding rate (unit-checked), NDX COT short-covering proxy, cross-sector correlation | CoinGecko/OKX, CFTC, Yahoo Finance |
 | – | Liquidity calendar | Rolling 120 days: announced Treasury coupon settlements, FOMC decision days, tax dates, month and quarter ends, estimated refunding dates; weekly event count, no severity percentiles | [FiscalData upcoming auctions](https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/upcoming_auctions), [Fed FOMC calendar](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm) |
 
-The new FRED indicators (funding extras, backstops, Fed balance sheet, credit, rates) are descriptive. They do not enter the LPI, the de-leveraging tally or any composite.
+The FRED indicators (funding extras, backstops, Fed balance sheet, credit, rates) do not enter the LPI or the de-leveraging tally. Some of them are inputs to the fragility chain and the FSI, which are documented separately.
 
 ### Code layout
 
@@ -105,7 +107,7 @@ Reserves/GDP with its rolling 156-week percentile remains a **separate** normali
 FRED can time out from GitHub Actions, which previously froze every LPI factor on the last cached week. Each LPI input now splices a second official source after FRED's last observation: SOFR from the [NY Fed reference-rate API](https://markets.newyorkfed.org/), WALCL (Wednesday total assets) and WTREGEN (weekly-average TGA) from the [Federal Reserve H.4.1 release archive](https://www.federalreserve.gov/releases/h41/), and overnight RRP take-up from the [NY Fed reverse-repo results API](https://markets.newyorkfed.org/api/rp/reverserepo/all/results/last/500.json). The pre-2018 short-rate history uses DFF, now committed to `data/fred-cache/DFF.csv` so CI and local runs use the same history.
 
 * Net-liquidity inputs are carried forward only across a single interior gap (holiday shift), never past a series' last print.
-* Treasury auctions dated after today are excluded from the 4-week duration-supply sum.
+* Duration supply is the 13-week sum of nominal and TIPS coupon auctions (Notes and Bonds of 1.5 years or more, reopenings included, floating-rate notes excluded), in `$B`. FiscalData is the main source; TreasuryDirect's auctioned-securities API fills auctions FiscalData has not posted yet. The weekly grid stops at the last date covered by a source, so a reporting lag is never read as zero issuance. Auctions dated after today are excluded.
 * The headline, factor cards, sparklines and decomposition all read the same week: the latest week on which every available factor has an observation. The gauge shows that common as-of date plus each factor's own last observation and source.
 * If the common week is more than 12 days old, the LPI is shown gray as a last-known value and no regime action language or sizing stance is issued.
 * LPI bands: below 40 low, 40-60 neutral, 60-80 elevated, 80+ extreme. The regime level still splits High/Low at 60.

@@ -20,6 +20,33 @@ CSS = (
     ".sec-nav a{flex:0 0 auto;color:var(--muted);text-decoration:none;font-size:12px;font-weight:600;padding:6px 10px;border-radius:6px;border:1px solid transparent;white-space:nowrap}"
     ".sec-nav a:hover{color:var(--text);background:#1e2433}.sec-nav a.active{color:#fff;background:var(--accent)}"
     ".overview{margin:14px 20px 4px}.overview h2,.what-changed h2{font-size:13px;font-weight:700;color:#cbd5e1;letter-spacing:.06em;text-transform:uppercase;margin:0 0 8px}"
+    ".chain-banner{display:flex;gap:14px;align-items:flex-start;background:var(--surface);border:1px solid var(--border);border-left:5px solid var(--na);border-radius:10px;padding:12px 14px;margin-bottom:10px}"
+    ".chain-banner.st-normal{border-left-color:var(--ok)}.chain-banner.st-watch{border-left-color:var(--watch)}.chain-banner.st-elevated{border-left-color:var(--elev)}.chain-banner.st-stress{border-left-color:var(--stress)}"
+    ".cb-lvl{flex:0 0 auto;min-width:120px}.cb-k{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700}"
+    ".cb-lvl b{display:block;font-size:26px;font-weight:800;line-height:1.15;margin-top:2px}.chain-banner.st-normal .cb-lvl b{color:var(--ok)}.chain-banner.st-watch .cb-lvl b{color:var(--watch)}.chain-banner.st-elevated .cb-lvl b{color:var(--elev)}.chain-banner.st-stress .cb-lvl b{color:var(--stress)}.chain-banner.st-na .cb-lvl b{color:var(--faint)}"
+    ".cb-body{flex:1 1 auto;min-width:0;font-size:14px;line-height:1.55;color:var(--text)}.cb-why{font-weight:600}.cb-next{color:#cbd5e1;margin-top:4px}.cb-note{color:var(--watch);margin-top:4px}"
+    ".chain-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}"
+    ".stage{display:block;position:relative;text-decoration:none;color:inherit;background:var(--surface);border:1px solid var(--border);border-top:4px solid var(--na);border-radius:10px;padding:10px 12px;min-width:0}"
+    ".stage:hover{border-color:#475569}.stage.cs-confirmed{border-top-color:var(--elev)}.stage.cs-partial{border-top-color:var(--watch)}.stage.cs-quiet{border-top-color:var(--ok)}"
+    ".stage-top{display:flex;gap:8px;align-items:baseline}.stage-num{font-size:12px;font-weight:800;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:1px 7px}"
+    ".stage-title{font-size:15px;font-weight:800;color:var(--text)}.stage-title .zh{font-weight:600;color:var(--muted);margin-left:6px;font-size:13px}"
+    ".stage-q{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.4}"
+    ".stage-st{display:flex;gap:8px;align-items:center;margin-top:8px}.stage-n{font-size:12px;color:var(--muted)}"
+    ".mc-badge.cs-confirmed{color:var(--elev);background:rgba(249,115,22,.14)}.mc-badge.cs-partial{color:var(--watch);background:rgba(245,158,11,.12)}.mc-badge.cs-quiet{color:var(--ok);background:rgba(16,185,129,.12)}"
+    ".stage-inds{list-style:none;margin:8px 0 0;padding:0;font-size:12.5px;line-height:1.45}"
+    ".stage-inds li{display:grid;grid-template-columns:10px minmax(0,1fr);column-gap:6px;padding:3px 0;border-top:1px solid rgba(148,163,184,.08)}"
+    ".stage-inds li i{width:8px;height:8px;border-radius:50%;background:var(--na);margin-top:5px}.stage-inds li.on i{background:var(--elev)}.stage-inds li.off i{background:var(--ok)}"
+    ".stage-inds li span{color:#cbd5e1}.stage-inds li b{grid-column:2;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}.stage-inds li.na span,.stage-inds li.na b{color:var(--faint)}"
+    ".fsi-card{background:var(--surface);border:1px solid var(--border);border-left:5px solid var(--na);border-radius:10px;padding:12px 14px;margin-top:10px}"
+    ".fsi-card.st-normal{border-left-color:var(--ok)}.fsi-card.st-watch{border-left-color:var(--watch)}.fsi-card.st-elevated{border-left-color:var(--elev)}.fsi-card.st-stress{border-left-color:var(--stress)}"
+    ".fsi-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}.fsi-title{font-size:16px;font-weight:800;color:var(--text)}.fsi-title span{font-size:13px;color:var(--muted);font-weight:600;margin-left:6px}"
+    ".fsi-sub{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.45}.fsi-val{display:flex;gap:8px;align-items:center}.fsi-val b{font-size:30px;font-weight:800;color:var(--text);font-variant-numeric:tabular-nums}"
+    ".fsi-card .mfd-chart{width:100%;height:280px;margin-top:6px}"
+    ".fsi-comps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}.fsi-comp{background:rgba(148,163,184,.06);border-radius:8px;padding:7px 9px;font-size:12.5px;color:#cbd5e1;line-height:1.4}.fsi-comp b{display:block;font-size:15px;color:var(--text)}"
+    ".chain-log{margin-top:10px;font-size:13px;color:#cbd5e1;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px}.chain-log ul{margin:4px 0 0;padding-left:18px}.chain-log li{margin:2px 0}.chain-log .up{color:var(--elev)}.chain-log .down{color:var(--ok)}"
+    "@media(max-width:1100px){.chain-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}"
+    "@media(max-width:640px){.chain-grid{grid-template-columns:minmax(0,1fr)}.chain-banner{flex-direction:column;gap:6px}.cb-lvl b{font-size:24px}.cb-body{font-size:14px}"
+    ".stage-inds{font-size:13px}.fsi-card .mfd-chart{height:300px}.fsi-comps{grid-template-columns:minmax(0,1fr)}.fsi-val b{font-size:26px}}"
     ".score-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}"
     ".score{display:block;text-decoration:none;background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--na);border-radius:10px;padding:10px 12px;min-width:0;color:inherit}"
     ".score:hover{border-color:#475569}"
@@ -107,6 +134,82 @@ def scorecard_html(tiles: list[dict[str, Any]]) -> str:
                        spark=fr.spark_svg(t.get("spark", []), st, 64, 22) if t.get("spark") else "", sub=e(t["sub"])))
     out.append("</div></div>")
     return "".join(out)
+
+
+
+CHAIN_TARGET = {"backdrop": "sec-lpi", "repo": "sofr-hero", "reserves": "sec-funding", "transmission": "sec-credit",
+                "amplification": "sec-amplifiers"}
+CHAIN_WORD = {"confirmed": "CONFIRMED", "partial": "PARTIAL", "quiet": "QUIET", "na": "NO DATA"}
+
+
+def chain_html(chain: dict[str, Any], stance_en: str, stance_cn: str, note: str, fsi_block: str, log_items: list[str],
+               log_note: str) -> str:
+    """Overview: chain level banner, five stage tiles, the daily FSI card and the stage-change log."""
+    lvl = chain["level"]
+    why = "; ".join(chain["reasons"]) if chain["reasons"] else "no stage from 1 to 4 is confirmed"
+    out = ['<div class="overview" id="overview"><h2>Overview 总览 <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--faint)">'
+           'fragility chain: pressure usually moves from repo to reserves to credit and rates, then to prices. Click a stage to open its section.</span></h2>',
+           '<div class="chain-banner {cls}" data-testid="chain-level" data-level="{lvl}"><div class="cb-lvl"><span class="cb-k">Chain level 传导链等级</span><b>{word}</b></div>'
+           '<div class="cb-body"><div class="cb-why">{stance} <span style="color:var(--muted);font-weight:500">({cn})</span></div>'
+           '<div class="cb-next">Why: {why}. {nxt}</div>{note}</div></div>'.format(
+               cls=fr.STATE_CLASS.get(lvl, "st-na"), lvl=e(lvl), word=fr.STATE_WORD.get(lvl, "NO DATA") if lvl != "na" else "NO DATA",
+               stance=e(stance_en), cn=e(stance_cn), why=e(why), nxt=e(chain["next_watch"]),
+               note=('<div class="cb-note" data-testid="chain-note">' + e(note) + '</div>') if note else ""),
+           '<div class="chain-grid" data-testid="chain">']
+    for st in chain["stages"]:
+        lis = []
+        for i in st["inds"]:
+            cls = "na" if i["on"] is None else ("on" if i["on"] else "off")
+            lis.append('<li class="{c}" title="{r}"><i></i><span>{n}</span><b>{v}</b></li>'.format(
+                c=cls, r=e("On when: " + i["rule"]) if i["rule"] else "", n=e(i["name"]), v=e(i["value"])))
+        hard = (' <span class="stage-n" style="color:var(--elev)">hard trigger: {}</span>'.format(e(st["hard_reason"]))
+                if st.get("hard") and st.get("hard_reason") else "")
+        out.append('<a class="stage cs-{s}" href="#{t}" data-testid="stage-{k}" data-status="{s}"><div class="stage-top">'
+                   '<span class="stage-num">{num}</span><span class="stage-title">{ti}<span class="zh">{zh}</span></span></div>'
+                   '<div class="stage-q">{q} {qz}</div><div class="stage-st"><span class="mc-badge cs-{s}">{w}</span>'
+                   '<span class="stage-n">{n} of {a} on</span>{hard}</div><ul class="stage-inds">{lis}</ul></a>'.format(
+                       s=e(st["status"]), t=CHAIN_TARGET.get(st["key"], "overview"), k=e(st["key"]), num=e(st["num"]),
+                       ti=e(st["title"]), zh=e(st["title_zh"]), q=e(st["q"]), qz=e(st["q_zh"]), w=CHAIN_WORD.get(st["status"], "NO DATA"),
+                       n=st["n_on"], a=st["n_avail"], hard=hard, lis="".join(lis)))
+    out.append("</div>")
+    out.append(fsi_block)
+    body = "".join("<li>{}</li>".format(i) for i in log_items) if log_items else "<li>No chain stage, chain level or FSI band has changed since the record started.</li>"
+    out.append('<div class="chain-log" data-testid="chain-log"><b>Stage changes 阶段变化记录</b><ul>{}</ul><div class="wc-note">{}</div></div>'.format(body, e(log_note)))
+    out.append("</div>")
+    return "".join(out)
+
+
+def fsi_html(fsi: dict[str, Any], ranges: str) -> str:
+    if not fsi.get("available"):
+        return ('<div class="fsi-card st-na" data-testid="fsi"><div class="fsi-title">Funding stress index 资金压力指数</div>'
+                '<div class="fsi-sub">Unavailable this run: fewer than two of the three funding prices had enough history.</div></div>')
+    st = fsi.get("state", "na")
+    rl, cl = fsi.get("raw_last", {}), fsi.get("comp_last", {})
+
+    def comp(k, label, what):
+        r, c = rl.get(k, float("nan")), cl.get(k, float("nan"))
+        return ('<div class="fsi-comp">{l}<b>{r} &middot; p{c}</b>{w}</div>').format(
+            l=e(label), r=("{:+.1f} bp".format(r) if r == r else "n/a"), c=("{:.0f}".format(c) if c == c else "n/a"), w=e(what))
+    stale = " (stale)" if fsi.get("stale") else ""
+    return ('<div class="fsi-card {cls}" data-testid="fsi"><div class="fsi-head"><div><div class="fsi-title">Funding stress index 资金压力指数<span>daily, 0 to 100</span></div>'
+            '<div class="fsi-sub">Average of three funding prices, each ranked against its own history since 2018 (no look-ahead). As of {asof}{stale}; 20-day change {chg}.</div></div>'
+            '<div class="fsi-val"><b>{v:.0f}</b><span class="mc-badge {cls}">{word}</span></div></div>{ranges}'
+            '<div id="chart-fsi" class="mfd-chart" data-testid="chart-fsi"></div>'
+            '<div class="fsi-comps">{c1}{c2}{c3}</div>'
+            '<details class="metric-details"><summary>About this indicator 说明</summary><div>'
+            'Repo: SOFR minus IORB, 5-observation median (collateral and dealer pressure). Interbank: EFFR minus IORB (reserve scarcity). '
+            'Tail: SOFR 99th percentile minus the SOFR median, 5-observation median (how far the most expensive repo trades sit above the typical trade). '
+            'Each spread is ranked against its trailing five years of daily data, using at least one year, with ties counted at their mid-rank so long flat periods sit near 50. '
+            'IOER is used before IORB started on 2021-07-29. The index is the mean of the available ranks, with at least two required. '
+            'Bands: below 60 normal, 60 to 80 watch, 80 to 95 elevated, 95 or more stress. '
+            'In the backtest the index reached 100 in September 2019, 97 in March 2020 and 90 in October to November 2025; it stayed below 40 during the March 2023 bank failures, '
+            'which were a deposit run rather than a funding-price event. It sits beside stages 1 and 2 and does not change the chain level by itself. '
+            'Sources: NY Fed SOFR and SOFR percentiles, FRED EFFR, Federal Reserve IORB and IOER.</div></details></div>').format(
+        cls=fr.STATE_CLASS.get(st, "st-na"), asof=e(fsi.get("asof", "n/a")), stale=stale,
+        chg=("{:+.0f} points".format(fsi["chg20"]) if fsi.get("chg20") == fsi.get("chg20") else "n/a"),
+        v=fsi["value"], word=fr.STATE_WORD.get(st, "STALE"), ranges=ranges,
+        c1=comp("repo", "Repo: SOFR - IORB, 5d median", ""), c2=comp("interbank", "Interbank: EFFR - IORB", ""),
+        c3=comp("tail", "Tail: SOFR 99th - median, 5d", ""))
 
 
 def sofr_hero_html(latest: str, median: str, rule: str, rule_cls: str, obs: str, detail: str, since: str, available: bool,
@@ -201,7 +304,7 @@ JS = r"""
     var id=a.getAttribute('data-target');var el=document.getElementById(id);if(!el)return;ev.preventDefault();
     openFor(id);var nav=document.querySelector('.sec-nav');var off=(nav?nav.offsetHeight:0)+6;
     var y=el.getBoundingClientRect().top+window.pageYOffset-off;window.scrollTo({top:y,behavior:'smooth'});});});
-  document.querySelectorAll('.score').forEach(function(a){a.addEventListener('click',function(){var id=(a.getAttribute('href')||'').slice(1);openFor(id);});});
+  document.querySelectorAll('.score,.stage').forEach(function(a){a.addEventListener('click',function(){var id=(a.getAttribute('href')||'').slice(1);openFor(id);});});
   if('IntersectionObserver' in window){
     var map={};links.forEach(function(a){map[a.getAttribute('data-target')]=a;});
     var io=new IntersectionObserver(function(es){es.forEach(function(en){if(en.isIntersecting){links.forEach(function(a){a.classList.remove('active');});

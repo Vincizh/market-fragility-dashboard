@@ -278,7 +278,13 @@ try {
 
     // ---- Phase 5 layout ---------------------------------------------------
     const lay = await page.evaluate(() => ({
-      tiles: document.querySelectorAll('[data-testid="scorecard"] .score').length,
+      stages: [...document.querySelectorAll('[data-testid="chain"] .stage')].map((el) => el.dataset.testid + ':' + el.dataset.status),
+      level: (document.querySelector('[data-testid="chain-level"]') || {dataset: {}}).dataset.level || '',
+      fsi: !!document.querySelector('[data-testid="fsi"]'),
+      fsiDrawn: !!document.querySelector('#chart-fsi .main-svg') || !document.getElementById('chart-fsi'),
+      chainLog: !!document.querySelector('[data-testid="chain-log"]'),
+      oldTiles: document.querySelectorAll('[data-testid="scorecard"]').length,
+      recovery: !!document.querySelector('[data-testid="section-recovery"] .confirm-counter'),
       wc: !!document.querySelector('[data-testid="what-changed"]'),
       navLinks: document.querySelectorAll('.sec-nav a').length,
       chip: (document.querySelector('[data-testid="health-chip"]') || {}).textContent || '',
@@ -288,19 +294,26 @@ try {
       oldStrip: !!document.querySelector('.summary-strip'),
       stateScript: !!document.getElementById('dash-state'),
     }));
-    check(`${tag} scorecard has six tiles`, lay.tiles === 6, String(lay.tiles));
+    check(`${tag} fragility chain has five stages in order`, lay.stages.length === 5
+      && lay.stages.map((x) => x.split(':')[0]).join(',') === 'stage-backdrop,stage-repo,stage-reserves,stage-transmission,stage-amplification'
+      && lay.stages.every((x) => /:(confirmed|partial|quiet|na)$/.test(x)), lay.stages.join(','));
+    check(`${tag} chain level is a known state`, ['normal', 'watch', 'elevated', 'stress', 'na'].includes(lay.level), lay.level);
+    check(`${tag} funding stress index card present and drawn`, lay.fsi && lay.fsiDrawn);
+    check(`${tag} stage-change log present`, lay.chainLog);
+    check(`${tag} old six-tile scorecard removed`, lay.oldTiles === 0, String(lay.oldTiles));
+    check(`${tag} de-lever counter lives in Recovery signals`, lay.recovery);
     check(`${tag} what-changed panel present`, lay.wc);
-    check(`${tag} sticky navigation has eleven links`, lay.navLinks === 11, String(lay.navLinks));
+    check(`${tag} sticky navigation has twelve links`, lay.navLinks === 12, String(lay.navLinks));
     check(`${tag} health chip shows source counts`, /Sources \d+\/\d+/.test(lay.chip), lay.chip);
     check(`${tag} takeaway has four numbered points`, lay.takeaway === 4, String(lay.takeaway));
     check(`${tag} four layer headers`, lay.layers === 4, String(lay.layers));
     check(`${tag} old summary strip removed`, !lay.oldStrip);
     check(`${tag} daily state snapshot embedded`, lay.stateScript);
     if (vp.label === 'mobile') {
-      check(`${tag} default open section on mobile is the LPI gauge only`, defaults.open.join(',') === 'sec-lpi', defaults.open.join(','));
+      check(`${tag} no section is open by default on mobile (the chain overview is always visible)`, defaults.open.length === 0, defaults.open.join(','));
       check(`${tag} default page height under 9000px`, defaults.height < 9000, String(defaults.height));
     } else {
-      check(`${tag} all sections open by default`, defaults.open.length === 9, String(defaults.open.length));
+      check(`${tag} all sections open by default`, defaults.open.length === 10, String(defaults.open.length));
     }
     // SOFR minus IORB monitor: always visible in the overview, drawn as a line chart, range-controlled
     const hero = await page.evaluate(async () => {
@@ -345,7 +358,7 @@ try {
     check(`${tag} new FRED cards drawn with charts`, Object.values(v3.cards).every((x) => x === 'ok'), JSON.stringify(v3.cards));
     check(`${tag} breadth, volume and cross-asset cards drawn`, v3.tape.every((x) => x === 1), v3.tape.join(''));
     check(`${tag} SOFR-IORB range buttons change the window`, hero.present && hero.spans['92'] < hero.spans['365'] && hero.spans['365'] < hero.spans['0'], JSON.stringify(hero.spans));
-    check(`${tag} SOFR-IORB monitor sits above the first layer`, hero.present && hero.visibleTop < 1500, String(Math.round(hero.visibleTop)));
+    check(`${tag} SOFR-IORB monitor sits above the first layer`, hero.present && hero.visibleTop < (tag === '[mobile]' ? 4500 : 1500), String(Math.round(hero.visibleTop)));   // mobile stacks the five chain stages first
     // Chart-first metric cards: every live card carries its own drawn time series, text sits behind About
     const mcs = await page.evaluate(() => {
       const cards = [...document.querySelectorAll('.mc')];
@@ -402,11 +415,11 @@ try {
       return { open: d.open, top: Math.round(d.getBoundingClientRect().top) };
     });
     check(`${tag} nav link opens and scrolls to the section`, nav.open && nav.top >= 0 && nav.top < 200, JSON.stringify(nav));
-    // scorecard tile jumps to its section
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await page.click('[data-testid="score-credit"]');
+    // chain stage jumps to its section
+    await page.evaluate(() => { window.scrollTo(0, 0); document.getElementById('sec-credit').open = false; });
+    await page.click('[data-testid="stage-transmission"]');
     await page.waitForTimeout(500);
-    check(`${tag} scorecard tile opens its section`, await page.evaluate(() => document.getElementById('sec-credit').open));
+    check(`${tag} chain stage opens its section`, await page.evaluate(() => document.getElementById('sec-credit').open));
     // COT tabs
     await page.evaluate(() => document.getElementById('sec-crowding').open = true);
     const tabState = await page.evaluate(() => {

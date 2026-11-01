@@ -40,7 +40,7 @@ try {
       fredTotal: fred.length,
       fredCached: fred.filter((r) => r[3] === 'cached').length,
       fredCurrent: fred.filter((r) => r[3] === 'current').length,
-      tiles: document.querySelectorAll('[data-testid="scorecard"] .score').length,
+      tiles: document.querySelectorAll('[data-testid="chain"] .stage').length,
       sections: ['section-funding', 'section-credit', 'section-rates', 'section-fed-bs'].map((id) => !!document.querySelector(`[data-testid="${id}"]`)),
       creditCards: document.querySelectorAll('[data-testid="section-credit"] .mc').length,
     };
@@ -48,7 +48,7 @@ try {
   check('health chip reports cached sources', /\d+ cached/.test(s.chip), s.chip);
   check('FRED rows exist in the health table', s.fredTotal >= 30, String(s.fredTotal));
   check('every non-stale FRED row is labelled cached, none current', s.fredCurrent === 0 && s.fredCached > 0, `cached=${s.fredCached} current=${s.fredCurrent}`);
-  check('scorecard still has six tiles', s.tiles === 6, String(s.tiles));
+  check('fragility chain still has five stages', s.tiles === 5, String(s.tiles));
   check('v2 sections still render', s.sections.every(Boolean), JSON.stringify(s.sections));
   check('credit cards still render', s.creditCards >= 6, String(s.creditCards));
   check('no console errors', errors.length === 0, errors.slice(0, 3).join(' | '));

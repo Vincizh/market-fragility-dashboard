@@ -39,6 +39,7 @@ import index_gex
 import layout_render
 import stress_calendar
 import dash_state
+import fragility_chain as fchain
 import health
 
 print("Starting dashboard generation...")
@@ -516,40 +517,29 @@ except Exception as e:
     lpi_ok["short_rate"] = False
     print("LPI short_rate error:", e)
 
-# Factor 2 — Duration supply (coupon issuance, trailing 4-week sum)
-issuance_4w = None
+# Factor 2 — Duration supply (coupon offering amounts, trailing 13-week sum, $ billions)
+# Notes and bonds, nominal and TIPS, original issues and reopenings; FRNs excluded.
+# FiscalData supplies the history and TreasuryDirect fills auctions FiscalData has not
+# published yet. Weeks after the last complete record are not emitted (no zero-fill).
+issuance_4w = None          # name kept for downstream code; now the 13-week sum
+supply_info = {}
 try:
-    au_rows = []
-    for attempt in range(3):
-        try:
-            url = ("https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query"
-                   "?fields=auction_date,offering_amt,security_term"
-                   "&filter=security_term:in:(2-Year,3-Year,5-Year,7-Year,10-Year,20-Year,30-Year)"
-                   "&sort=-auction_date&page[size]=10000&page[number]=1")
-            au_rows = requests.get(url, timeout=50).json().get("data", [])
-            break
-        except Exception as e:
-            print("LPI auctions retry {}: {}".format(attempt, e))
-    if not au_rows:
-        raise RuntimeError("no auction rows")
-    au = pd.DataFrame(au_rows)
-    au["auction_date"] = pd.to_datetime(au["auction_date"])
-    au["offering_amt"] = pd.to_numeric(au["offering_amt"], errors="coerce")
-    au = au.dropna(subset=["offering_amt"])
-    au = au[au["auction_date"] >= pd.Timestamp(FACTOR_START)]
-    # Announced-but-not-yet-held auctions are excluded so the 4w sum never
-    # runs ahead of the other factors.
-    au = au[au["auction_date"] <= pd.Timestamp(datetime.now(timezone.utc).date())]
-    wk = fm.weekly_issuance_grid(au, datetime.now(timezone.utc).date())
-    iss4 = (wk.rolling(4).sum().dropna()) / 1e9  # -> $ billions
-    lpi_pct["duration_supply"] = pctile_series(iss4)
-    lpi_rawser["duration_supply"] = iss4
-    lpi_srcname["duration_supply"] = "Treasury auctions_query"
-    issuance_4w = float(iss4.iloc[-1])
+    supply_info = fm.fetch_coupon_supply(start=FACTOR_START)
+    if supply_info.get("errors"):
+        print("LPI supply source errors:", supply_info["errors"])
+    wk = supply_info["weekly"]
+    if wk.empty:
+        raise RuntimeError("no coupon auction rows")
+    iss13 = wk.rolling(fm.SUPPLY_WINDOW_WEEKS).sum().dropna()
+    iss13 = iss13[iss13.index >= pd.Timestamp(FACTOR_START)]
+    lpi_pct["duration_supply"] = pctile_series(iss13)
+    lpi_rawser["duration_supply"] = iss13
+    lpi_srcname["duration_supply"] = supply_info.get("source", "Treasury auctions")
+    issuance_4w = float(iss13.iloc[-1])
     lpi_raw["duration_supply"] = issuance_4w
     lpi_ok["duration_supply"] = True
-    print("LPI duration_supply weeks={} last_4w=${:.1f}B pct={:.1f}".format(
-        len(iss4), issuance_4w, lpi_pct["duration_supply"].iloc[-1]))
+    print("LPI duration_supply weeks={} last_13w=${:.1f}B pct={:.1f} known_through={} td_only_rows={}".format(
+        len(iss13), issuance_4w, lpi_pct["duration_supply"].iloc[-1], supply_info.get("known_through"), supply_info.get("n_td_only")))
 except Exception as e:
     lpi_ok["duration_supply"] = False
     print("LPI duration_supply error:", e)
@@ -995,11 +985,11 @@ FACTOR_COMMENTARY = {
         "hi":  {"any": ("Expensive funding at {raw} SOFR — carry costly, size leverage smaller.", "资金昂贵")},
     },
     "duration_supply": {
-        "lo":  {"any": ("Light coupon supply ({raw} 4w) — duration demand easily absorbed.", "久期供给低")},
-        "mid": {"rising":  ("Coupon supply building ({raw} 4w) — watch auction/refunding windows.", "久期供给上升"),
-                "falling": ("Coupon supply easing ({raw} 4w) — issuance drain receding.", "久期供给回落"),
-                "flat":    ("Coupon supply steady ({raw} 4w) — issuance pressure balanced.", "久期供给平稳")},
-        "hi":  {"any": ("Heavy issuance ({raw} 4w) — refunding waves dominate; keep calendar hedges.", "久期供给高企")},
+        "lo":  {"any": ("Light coupon supply ({raw} 13w) — duration demand easily absorbed.", "久期供给低")},
+        "mid": {"rising":  ("Coupon supply building ({raw} 13w) — watch auction/refunding windows.", "久期供给上升"),
+                "falling": ("Coupon supply easing ({raw} 13w) — issuance drain receding.", "久期供给回落"),
+                "flat":    ("Coupon supply steady ({raw} 13w) — issuance pressure balanced.", "久期供给平稳")},
+        "hi":  {"any": ("Heavy issuance ({raw} 13w) — refunding waves dominate; keep calendar hedges.", "久期供给高企")},
     },
     "net_liquidity": {
         "lo":  {"any": ("Ample bank reserves ({raw} net liq) — deep liquidity cushion.", "流动性充裕")},
@@ -1337,7 +1327,7 @@ s_lpi_vix    = _fmt_raw("vol_amplifier", "{:.1f}", lpi_raw.get("vol_amplifier", 
 # Raw physical-unit metric shown on each factor card (reuses series already computed).
 LPI_RAW_TXT = {"short_rate": s_lpi_sofr, "duration_supply": s_lpi_iss,
                "net_liquidity": s_lpi_netliq, "vol_amplifier": s_lpi_vix}
-LPI_RAW_UNIT = {"short_rate": "SOFR overnight", "duration_supply": "coupon supply, 4w sum",
+LPI_RAW_UNIT = {"short_rate": "SOFR overnight", "duration_supply": "coupon supply, 13w sum",
                 "net_liquidity": "WALCL &minus; TGA &minus; RRP", "vol_amplifier": "VIX spot"}
 FACTOR_SPARK_COL = {"short_rate": "#6366f1", "duration_supply": "#f59e0b",
                     "net_liquidity": "#14b8a6", "vol_amplifier": "#ef4444"}
@@ -2059,69 +2049,108 @@ j_sofr_spread = json.dumps({
 strip_lpi = (s_lpi + " <span style=\"color:" + reg_col + "\">" + reg_dir + "</span>") if lpi_has else "N/A"
 
 # ---------------------------------------------------------------------------
+# Fragility chain + daily Funding Stress Index (overview synthesis)
+# ---------------------------------------------------------------------------
+_fsi_raw = {}
+for _sid in ("SOFR", "EFFR", "SOFR99", "IORB", "IOER"):
+    try:
+        _v = fm.fetch_fred_series(_sid, "2018-04-01")
+        if _v is not None and len(_v.dropna()):
+            _fsi_raw[_sid] = _v.dropna().sort_index()
+    except Exception as _e:
+        print("FSI input {} unavailable: {}".format(_sid, _e))
+try:
+    fsi = fchain.funding_stress_index(_fsi_raw.get("SOFR"), _fsi_raw.get("EFFR"), _fsi_raw.get("SOFR99"),
+                                      fchain.anchor_rate(_fsi_raw.get("IORB"), _fsi_raw.get("IOER")))
+except Exception as _e:
+    print("FSI failed:", _e)
+    fsi = {"available": False}
+if fsi.get("available"):
+    _fsi_age = (pd.Timestamp(fm.utc_now()).tz_localize(None).normalize() - pd.Timestamp(fsi["asof"])).days
+    fsi["stale"] = _fsi_age > 7
+    if fsi["stale"]:
+        fsi["state"] = "na"
+    print("FSI: {:.1f} ({}) as of {} | components {}".format(fsi["value"], fsi["state"], fsi["asof"],
+          {k: round(v, 1) for k, v in fsi["comp_last"].items()}))
+else:
+    print("FSI unavailable")
+
+_fcards = {c["id"]: c for c in fred_mod["funding"]["cards"] + fred_mod["funding"]["backstops"]}
+
+
+def _fnum(cid, key="num"):
+    c = _fcards.get(cid) or {}
+    if c.get("stale") or c.get("state") == "na":
+        return float("nan")
+    v = c.get(key)
+    return float(v) if isinstance(v, (int, float)) and v == v else float("nan")
+
+
+_tin = fchain.transmission_inputs(fred_series, fm.utc_now())
+_res_leg_state = leg_res.get("state", "unavailable")
+_chain_x = {
+    "lpi": lpi_composite if lpi_has else float("nan"), "lpi_stale": bool(lpi_stale),
+    "basis": basis_proxy,
+    "reserves_txt": ("${:.3f}T, 4w {:+.0f}B".format(res_level["current_trillions"], res_level.get("four_week_change_b") or float("nan"))
+                     if _fast_live(res_level) else "n/a"),
+    "reserves_state": ("on" if _res_leg_state in ("active", "elevated") else
+                       ("normal" if _res_leg_state in ("normal", "approaching") else "na")),
+    "resgdp_txt": ("{:.2f}% (p{:.0f})".format(reserves.get("ratio", float("nan")), reserves.get("percentile", float("nan")))
+                   if _fast_live(reserves) else "n/a"),
+    "resgdp_state": ((("on" if res_status in ("warning", "elevated") else "normal")) if _fast_live(reserves) else "na"),
+    "sofr_med_bp": (float(sofr_spread.get("filtered_5d_bp")) if (sofr_spread.get("filtered_5d_bp") is not None
+                    and not (sofr_spread.get("freshness") or {}).get("stale")) else float("nan")),
+    "tgcr_bp": _fnum("tgcr-iorb", "num_med5"), "bgcr_bp": _fnum("bgcr-iorb", "num_med5"),
+    "tail_bp": _fnum("sofr-disp"), "tail_state": (_fcards.get("sofr-disp") or {}).get("state"),
+    "tbill_bp": _tin.get("tbill_bp", float("nan")), "tbill_pct": _tin.get("tbill_pct", float("nan")),
+    "effr_bp": _fnum("effr-iorb"), "effr_chg20": _fnum("effr-iorb", "num_chg20"),
+    "srf_b": _fnum("srf"), "srf_state": (_fcards.get("srf") or {}).get("backstop"),
+    "dw_b": _fnum("dw"), "dw_state": (_fcards.get("dw") or {}).get("backstop"),
+    "gamma": ("negative" if (dg_has and not dg_positive) else ("positive" if dg_has else "na")),
+    "vix_state": vix_state,
+    "corr2w": float(avg_c2w) if avg_c2w == avg_c2w else float("nan"),
+    "corr1m": float(avg_c1m) if avg_c1m == avg_c1m else float("nan"),
+}
+_spyv = (tape.get("spy_volume") or {}) if tape.get("available") else {}
+_chain_x["spy_vol_ratio"] = _spyv.get("ratio", float("nan"))
+_chain_x["spy_ret1"] = ((tape.get("assets") or {}).get("SPY") or {}).get("ret1", float("nan")) if tape.get("available") else float("nan")
+_chain_x.update({k: v for k, v in _tin.items() if k not in ("tbill_bp", "tbill_pct")})
+for _k in ("srf_state", "dw_state"):
+    if _chain_x[_k] == "stale":
+        _chain_x[_k] = "unavailable"
+chain = fchain.build_chain(_chain_x)
+chain_note = fchain.contradiction_note(chain["level"], lpi_composite if lpi_has else float("nan"), bool(lpi_stale), fsi)
+print("Fragility chain: level={} | {}".format(chain["level"], " | ".join(
+    "{} {} {}/{}".format(st["num"], st["status"], st["n_on"], st["n_avail"]) for st in chain["stages"])))
+for _r in chain["reasons"]:
+    print("  chain reason:", _r)
+
+# ---------------------------------------------------------------------------
 # Key Takeaway (Part B) — deterministic, rule-based, bilingual. No LLM.
 # One sentence per layer + a synthesis stance from a decision table. Every
 # clause degrades to "data unavailable" rather than crashing or fabricating.
 # Language is strictly about sizing / hedging / fragility — never directional.
 # ---------------------------------------------------------------------------
-def takeaway_stance(level, direction, basis, gex_sign, lpi, stale=False, asof=None):
-    """Return (english_stance, chinese_tag, color) from the decision table."""
-    if stale:
-        return ("LPI is stale (last common week {}); no sizing stance is issued until the factors update.".format(asof or "N/A"),
-                "数据过期—暂不给出仓位立场", "#64748b")
-    crowded = (basis == basis) and basis >= 80
-    neutral = lpi == lpi and 40 <= lpi < 60
-    gex_neg = gex_sign == "negative"
-    if lpi == lpi and lpi >= 80:
-        return ("Extreme fragility — defensive posture: minimize leverage and carry robust hedges.",
-                "极端压力—防守", "#ef4444")
-    if (gex_neg and lpi == lpi and lpi >= 60):
-        return ("Reduce leverage and widen hedges — dealer gamma is negative into an elevated-fragility tape (amplification regime).",
-                "降杠杆加对冲", "#ef4444")
-    if level == "High" and direction == "Rising":
-        return ("Reduce leverage and widen hedges — fragility is high and still rising (amplification regime).",
-                "降杠杆加对冲", "#ef4444")
-    if level == "High" and direction == "Falling":
-        return ("Decompression: pressure receding from highs — a measured re-engagement window per the de-lever signals.",
-                "关注拐点", "#14b8a6")
-    if level == "Low" and direction == "Rising" and neutral:
-        return ("Neutral and rising: pressure is building through the 40-60 band — stage hedges.",
-                "中性上行—准备对冲", "#f97316")
-    if level == "Low" and direction == "Rising":
-        return ("Inflection watch: pressure is building from a low base — begin staging hedges.",
-                "关注拐点", "#f59e0b")
-    if level == "Low" and crowded and neutral:
-        return ("Neutral fragility, and crowded basis positioning makes issuance events the tail to watch — keep calendar hedges around auction / refunding windows.",
-                "中性—关注基差", "#f59e0b")
-    if level == "Low" and neutral:
-        return ("Neutral fragility (LPI 40-60): no strong sizing signal; watch for an inflection.",
-                "中性观察", "#f59e0b")
-    if level == "Low" and crowded:
-        return ("Cushion is thick today, but crowded basis positioning makes issuance events the tail to watch — keep calendar hedges around auction / refunding windows.",
-                "保持仓位—关注基差", "#f59e0b")
-    if level == "Low":
-        base = "Liquidity cushion thick (LPI below 40)"
-        return ((base + " and dealers are dampening.") if gex_sign == "positive" else (base + "."),
-                "保持仓位", "#10b981")
-    return ("Elevated but stable — keep hedges on and size moderately.", "关注拐点", "#f97316")
-
-
 def build_takeaway():
     sents = []
-    # 1 — Fragility
-    if lpi_has:
-        s = ("Fragility: LPI {:.0f} as of {} ({} · {}), ΔLPI 13w {}, breadth {}/4 factors "
-             "elevated-and-rising.").format(lpi_composite, lpi_fresh["asof"], reg_level, reg_dir, s_d13, breadth)
-        if lpi_stale:
-            s += " This reading is {} days old and is shown as last-known only.".format(lpi_fresh["age_days"])
-        t8 = tail_table.get(current_band, {}).get(8) if tail_ok else None
-        b8 = tail_table.get("ALL", {}).get(8) if tail_ok else None
-        if t8 and b8:
-            s += (" In band {}, the 8-week frequency of a >10% max drawdown was {} vs {} baseline.").format(
-                current_band, _pctu(t8["p10"]), _pctu(b8["p10"]))
-        sents.append(s)
+    # 1 — Fragility chain, then the weekly LPI as backdrop
+    _bk = chain["by_key"]
+    _conf = [st for st in chain["stages"] if st["status"] == "confirmed" and st["key"] != "backdrop"]
+    s = "Fragility chain: {}.".format(chain["level"])
+    if _conf:
+        s += " Confirmed: " + ", ".join("stage {} {}".format(st["num"], st["title"].lower()) for st in _conf) + "."
     else:
-        sents.append("Fragility: LPI data unavailable this run.")
+        s += " No stage from 1 to 4 is confirmed."
+    _part = [st for st in chain["stages"] if st["status"] == "partial" and st["key"] != "backdrop"]
+    if _part:
+        s += " Partial (one indicator on): " + ", ".join("stage {} {}".format(st["num"], st["title"].lower()) for st in _part) + "."
+    if lpi_has:
+        s += " Backdrop: weekly LPI {:.0f} as of {} ({} and {}){}; backdrop stage {}.".format(
+            lpi_composite, lpi_fresh["asof"], reg_level.lower(), reg_dir.lower(),
+            " and {} days old".format(lpi_fresh["age_days"]) if lpi_stale else "", _bk["backdrop"]["status"])
+    else:
+        s += " Backdrop: LPI unavailable this run."
+    sents.append(s)
 
     # 2 — Funding
     _fm = fred_mod["funding"]
@@ -2132,6 +2161,8 @@ def build_takeaway():
     if _w.get("key", "na") != "na":
         f_bits.append("pressure locus: {} (SOFR-IORB 5d median {:+.0f} bp, EFFR-IORB {:+.0f} bp)".format(
             _w["label_en"].lower(), _w["secured_med_bp"], _w["unsec_bp"]))
+    if fsi.get("available") and not fsi.get("stale"):
+        f_bits.insert(0, "funding stress index {:.0f} ({}, 20d {:+.0f})".format(fsi["value"], fsi["state"], fsi.get("chg20", float("nan"))))
     sents.append("Funding: " + "; ".join(f_bits) + ".")
 
     # 3 — Credit and rates
@@ -2182,13 +2213,10 @@ def build_takeaway():
     bits3.append(("crypto funding " + ("positive" if (btc_pos and eth_pos)
                  else ("mixed" if (btc_pos or eth_pos) else "negative or zero"))) if fun_any
                  else "crypto funding unavailable")
-    bits3.append("{} de-lever conditions met".format(delever["text"]))
+    bits3.append("recovery signals: {} de-lever conditions met".format(delever["text"]))
     sents.append(crowd_txt + " Amplifiers: " + "; ".join(bits3) + ".")
 
-    gsign = ("positive" if dg_positive else "negative") if dg_has else None
-    st_en, st_cn, st_col = takeaway_stance(
-        reg_level, reg_dir, basis_proxy, gsign, lpi_composite if lpi_has else float("nan"),
-        stale=lpi_has and lpi_stale, asof=lpi_fresh["asof"])
+    st_en, st_cn, st_col = fchain.stance(chain["level"])
     return sents, st_en, st_cn, st_col
 
 
@@ -2196,7 +2224,7 @@ tk_sents, tk_stance_en, tk_stance_cn, tk_stance_col = build_takeaway()
 print("Key Takeaway stance:", tk_stance_en, "|", tk_stance_cn)
 
 # ---------------------------------------------------------------------------
-# v2 overview: scorecard tiles, what-changed and the embedded daily state
+# Overview: fragility chain, what-changed and the embedded daily state
 # ---------------------------------------------------------------------------
 def _lpi_global_state():
     if not lpi_has or lpi_stale:
@@ -2210,49 +2238,42 @@ def _basis_global_state():
     return "normal" if basis_proxy < 40 else ("watch" if basis_proxy < 80 else ("elevated" if basis_proxy < 95 else "stress"))
 
 
-_fp_map = {"normal": "normal", "watch": "watch", "warning": "elevated", "structural-top-risk": "stress"}
-_fm = fred_mod["funding"]
-_fund_state = _fp_map.get(fp_state, "na")
-if _fund_state != "na" and _fm["backstops_in_use"] >= 1:
-    _fund_state = fred_monitor.worst([_fund_state, "elevated"])
-_cot_extreme = sum(1 for _m in cot_markets.values() if _m.get("pct") == _m.get("pct") and (_m["pct"] >= 90 or _m["pct"] <= 10))
-_amp_state = "na" if sig_eval == 0 else ("elevated" if sig_count <= 1 else ("watch" if sig_count == 2 else "normal"))
-if dg_has and not dg_positive:
-    _amp_state = fred_monitor.worst([_amp_state, "elevated"]) if _amp_state != "na" else "elevated"
-
-_sofr_f = (sofr_spread.get("filtered_bp") or [])[-20:]
-_lpi_spark = [round(float(v), 1) for v in lpi_series_full.tail(13).values] if lpi_has else []
+# Section badges: breadth of indicator states, not the single worst series
 _credit_m, _rates_m = fred_mod["credit"], fred_mod["rates"]
-score_tiles = [
-    {"id": "lpi", "title": "Fragility 脆弱度 · LPI", "value": s_lpi if lpi_has else "N/A", "state": _lpi_global_state(),
-     "sub": ("{} · {} · as of {}".format(reg_level, reg_dir, lpi_asof_txt) if lpi_has else "insufficient data")
-            + (" · stale" if (lpi_has and lpi_stale) else ""), "spark": _lpi_spark, "target": "sec-lpi"},
-    {"id": "funding", "title": "Funding 资金面", "value": "{}/3".format(fp_count) if fp_state != "unavailable" else "N/A",
-     "state": _fund_state, "sub": "SOFR-IORB {} · EFFR-IORB {} · {} · backstops in use {}/{}".format(
-         (("{:+.1f} bp".format(float((sofr_spread.get("raw_bp") or [float("nan")])[-1]))) if sofr_spread.get("raw_bp") else "n/a"),
-         (("{:+.0f} bp".format(_where["unsec_bp"])) if _where.get("key", "na") != "na" else "n/a"),
-         ({"broad": "broad: repo and interbank", "secured": "repo pressure, interbank calm", "unsecured": "interbank pressure",
-           "calm": "calm"}.get(_where.get("key", "na"), "locus n/a")),
-         _fm["backstops_in_use"], _fm["backstops_avail"]),
-     "spark": [float(v) for v in _sofr_f if v == v], "target": "sec-funding"},
-    {"id": "credit", "title": "Credit 信用 · HY OAS", "value": _credit_m["hy_value"], "state": _credit_m["state"],
-     "sub": "CCC minus BB {} · {}".format(_credit_m["ccc_bb"], _credit_m["ccc_bb_sub"].split(" · ")[0]),
-     "spark": (_credit_m["ladder"][0]["spark"] if _credit_m["ladder"] else []), "target": "sec-credit"},
-    {"id": "rates", "title": "Rates 利率 · 30Y", "value": _rates_m["dgs30"], "state": _rates_m["state"],
-     "sub": "10Y term premium {}".format(_rates_m["tp"]),
-     "spark": (next((c["spark"] for c in _rates_m["cards"] if c["id"] == "dgs30"), [])), "target": "sec-rates"},
-    {"id": "crowding", "title": "Crowding 拥挤度 · Basis proxy", "value": s_basis if basis_has else "N/A", "state": _basis_global_state(),
-     "sub": "COT extremes (>=90th or <=10th pctile): {}".format(_cot_extreme), "spark": [], "target": "sec-crowding"},
-    {"id": "amplifiers", "title": "Amplifiers 放大器", "value": "{}/{}".format(sig_count, sig_eval) if sig_eval else "N/A",
-     "state": _amp_state, "sub": "de-lever conditions met · dealer gamma " + (("positive" if dg_positive else "negative") if dg_has else "n/a"),
-     "spark": [], "target": "sec-amplifiers"},
-]
+_credit_badge = fchain.breadth_state([c.get("state", "na") for c in _credit_m.get("ladder", []) + _credit_m.get("cards", []) if c.get("id") != "cp-tbill"])
+_rates_badge = fchain.breadth_state([c.get("state", "na") for c in _rates_m.get("cards", []) if c.get("id") in ("dgs30", "dgs10", "dfii10", "tp10")])
+_sofr_leg_state = {"normal": "normal", "approaching": "watch", "active": "elevated", "elevated": "stress"}.get(leg_sofr.get("state"), "na")
+_fund_badge = fchain.breadth_state([c.get("state", "na") for c in fred_mod["funding"]["cards"]]
+                                   + [c.get("state", "na") for c in fred_mod["funding"]["backstops"]] + [_sofr_leg_state])
+_amp_st = chain["by_key"]["amplification"]["status"]
+_amp_state = {"confirmed": "elevated", "partial": "watch", "quiet": "normal"}.get(_amp_st, "na")
 
 _today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 _dash_days = dash_state.load(_prev_html)
-_snapshot = {t["id"]: {"s": t["state"], "t": t["value"], "label": t["title"].split(" · ")[0]} for t in score_tiles}
+_snapshot = {"chain": {"s": chain["level"], "t": chain["level"], "label": "Chain level"}}
+for _st in chain["stages"]:
+    _snapshot["stage-" + _st["key"]] = {"s": _st["status"], "t": "{} of {} on".format(_st["n_on"], _st["n_avail"]),
+                                         "label": "Stage {} {}".format(_st["num"], _st["title"].lower())}
+if fsi.get("available") and not fsi.get("stale"):
+    _snapshot["fsi"] = {"s": fsi["state"], "t": "{:.0f}".format(fsi["value"]), "label": "Funding stress index"}
+_snapshot = {k: v for k, v in _snapshot.items() if v["s"] != "na"}
 _snap_base, _snap_changes = dash_state.compare(_dash_days, _today_iso, _snapshot)
 _dash_days = dash_state.update(_dash_days, _today_iso, _snapshot)
+
+# Stage-change record: data/chain-state.json (written only by the production run, never the degraded test run)
+CHAIN_STATE_PATH = "data/chain-state.json"
+_chain_write = (os.environ.get("MFD_OUTPUT") or "index.html") == "index.html"
+try:
+    with open(CHAIN_STATE_PATH, encoding="utf-8") as _f:
+        _chain_hist = json.load(_f)
+except (OSError, ValueError):
+    _chain_hist = {}
+_chain_hist, _chain_new = fchain.update_history(_chain_hist, fchain.snapshot(chain, fsi, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")))
+if _chain_write:
+    with open(CHAIN_STATE_PATH, "w", encoding="utf-8") as _f:
+        json.dump(_chain_hist, _f, indent=1)
+for _e in _chain_new:
+    print("CHAIN CHANGE:", fchain.event_text(_e))
 
 _wk_cut = pd.Timestamp(datetime.now(timezone.utc).date()) - pd.Timedelta(days=7)
 try:
@@ -2275,14 +2296,14 @@ for _c in _state_chg[:6]:
     wc_items.append('<span class="{}">{}</span> moved from {} to {} (now {}).'.format(
         "up" if _c["worse"] else "down", _c["title"], _c["from"], _c["to"], _c["value"]))
 for _c in _snap_changes:
-    wc_items.append("Scorecard {} moved from {} ({}) to {} ({}).".format(_c["label"], _c["from"], _c["prev"], _c["to"], _c["now"]))
+    wc_items.append("{} moved from {} to {} over the week (now {}).".format(_c["label"], _c["from"], _c["to"], _c["now"]))
 for _c in _moves:
     wc_items.append(_c["text"] + ".")
 wc_items = wc_items[:8]
 if _snap_base:
-    wc_note = "Indicator states compare with 7 days earlier, rebuilt from each series' own history. Scorecard states compare with the stored snapshot of " + _snap_base + "."
+    wc_note = "Indicator states compare with 7 days earlier, rebuilt from each series' own history. Chain stages compare with the stored snapshot of " + _snap_base + "."
 else:
-    wc_note = "Indicator states compare with 7 days earlier, rebuilt from each series' own history. Scorecard comparison is building history: {} daily snapshot(s) stored, one that is 5 to 10 days old is needed.".format(len(_dash_days))
+    wc_note = "Indicator states compare with 7 days earlier, rebuilt from each series' own history. Chain-stage comparison is building history: {} daily snapshot(s) stored, one that is 5 to 10 days old is needed.".format(len(_dash_days))
 _sofr_ok = bool(sofr_spread.get("dates")) and bool(leg_sofr.get("available")) and not (leg_sofr.get("freshness") or {}).get("stale")
 _raw_l, _fil_l = (sofr_spread.get("raw_bp") or []), (sofr_spread.get("filtered_bp") or [])
 _fmt_bp = lambda v: "{:+.1f} bp".format(float(v)) if v is not None and v == v else "n/a"
@@ -2296,16 +2317,13 @@ sofr_hero = layout_render.sofr_hero_html(
     effr=("{:+.0f} bp".format(_where["unsec_bp"]) if _where.get("key", "na") != "na" else "n/a"),
     where=(_where.get("label_en", "") if _where.get("key", "na") != "na" else "unavailable"),
     where_cls={"broad": "on", "secured": "near", "unsecured": "near", "calm": "off"}.get(_where.get("key", "na"), "off"))
-overview_html = layout_render.scorecard_html(score_tiles) + sofr_hero + layout_render.changes_html(wc_items, wc_note)
-
-# Decision-table demonstration (forced combos) + degraded-mode check for logs
-for _combo in [("Low", "Falling", 40.0, "positive", 35.0),
-               ("Low", "Rising", 50.0, "positive", 45.0),
-               ("High", "Rising", 85.0, "negative", 72.0),
-               ("High", "Falling", 60.0, "positive", 66.0),
-               ("Low", "Falling", 92.0, "positive", 38.0)]:
-    print("  stance{} -> {} | {}".format(_combo, *takeaway_stance(*_combo)[:2]))
-
+_chain_log = [('<span class="{}">'.format("up" if _e.get("worse") else "down") + _html.escape(fchain.event_text(_e)) + "</span>")
+              for _e in reversed((_chain_hist.get("events") or [])[-8:])]
+_chain_log_note = ("Recorded at every hourly run since {}. Unavailable readings do not create a change, so a data outage is not shown as relief. "
+                   "Full history: data/chain-state.json in the repository.").format((_chain_hist.get("started") or "this run")[:10])
+_fsi_block = layout_render.fsi_html(fsi, fred_render.ranges_row("chain", "3Y") if fsi.get("available") else "")
+overview_html = (layout_render.chain_html(chain, tk_stance_en, tk_stance_cn, chain_note, _fsi_block, _chain_log, _chain_log_note)
+                 + sofr_hero + layout_render.changes_html(wc_items, wc_note))
 
 # Homebrew GEX display precompute
 def _fmt_bn(v):
@@ -2546,7 +2564,7 @@ parts.append('<p>4-layer risk stack: fragility · conditions · crowding · ampl
 parts.append('<div class="header-right"><div class="timestamp">Last updated: ' + now_str + '</div>@@HEALTH_CHIP@@</div></div>')
 parts.append(layout_render.nav_html([("overview", "Overview"), ("sofr-hero", "SOFR-IORB"), ("sec-lpi", "LPI"), ("sec-funding", "Funding"), ("sec-fedbs", "Fed balance sheet"),
                                      ("sec-credit", "Credit"), ("sec-rates", "Rates"), ("sec-crowding", "Crowding"),
-                                     ("sec-amplifiers", "Amplifiers"), ("sec-calendar", "Calendar"), ("sec-methods", "Methods")]))
+                                     ("sec-amplifiers", "Amplifiers"), ("sec-recovery", "Recovery"), ("sec-calendar", "Calendar"), ("sec-methods", "Methods")]))
 
 # overview: scorecard, what changed, key takeaway
 _blk("overview")
@@ -2566,7 +2584,7 @@ parts.append('</div>')
 
 # ===================== LAYER 1 — FRAGILITY =====================
 _blk("l1_hdr")
-parts.append('<div class="layer-header">第一层 · 脆弱度 Fragility <span>Liquidity Pressure Index</span>'
+parts.append('<div class="layer-header">第一层 · 背景脆弱度 Backdrop <span>weekly Liquidity Pressure Index; the overview chain uses daily prices</span>'
              + '<span class="tf">weeks–months</span></div>')
 
 _blk("fastcards")
@@ -2836,7 +2854,7 @@ else:
 
 _blk("l4_hdr")
 parts.append('<div class="layer-header">第四层 · 放大器与触发器 Amplifiers &amp; Triggers '
-             + '<span>de-lever bottom signals + dealer gamma</span><span class="tf">hours–days</span></div>')
+             + '<span>market tape and dealer gamma (stage 4); de-lever signals sit in Recovery signals</span><span class="tf">hours–days</span></div>')
 _blk("signals")
 
 # signal bar
@@ -2884,7 +2902,7 @@ parts.append('</div></div>')
 _blk("confirm")
 # confirm counter
 parts.append('<div class="confirm-counter">')
-parts.append('<div class="confirm-label">Signals confirmed</div>')
+parts.append('<div class="confirm-label">Recovery signals confirmed 修复信号</div>')
 parts.append('<div class="confirm-dots">' + dots + '</div>')
 parts.append('<div class="confirm-text"><strong>' + str(sig_count) + '/' + str(sig_eval) + '</strong> &mdash; <span style="color:' + ccol + '">' + cmsg + '</span></div>')
 parts.append('</div>')
@@ -3248,7 +3266,11 @@ parts.append('     xaxis:{type:"date",gridcolor:"#1e2433",tickformat:"%b %d",tic
 parts.append('     yaxis:{gridcolor:"#1e2433",tickfont:{size:12},fixedrange:true,rangemode:"tozero",dtick:1,title:{text:"events",font:{size:12}}}}),CFG);')
 parts.append('  scIds.push("chart-stress-cal");')
 parts.append('}')
-_mfd_charts = {"funding": fred_mod["funding"]["charts"] + fred_mod["funding"]["card_charts"]
+_mfd_charts = {"chain": ([{"id": "chart-fsi", "title": "Funding stress index", "unit": "score", "default_range": "3Y",
+                           "traces": [fred_modules._tr("FSI", "#f59e0b", fsi["series"], digits=1)],
+                           "refs": [{"y": 60, "label": "60 watch", "color": "#f59e0b"}, {"y": 80, "label": "80 elevated", "color": "#f97316"},
+                                    {"y": 95, "label": "95 stress", "color": "#ef4444"}]}] if fsi.get("available") else []),
+               "funding": fred_mod["funding"]["charts"] + fred_mod["funding"]["card_charts"]
                + ([fred_mod["funding"]["where"]["chart"]] if (fred_mod["funding"].get("where") or {}).get("chart") else []),
                "fedbs": fred_mod["fedbs"]["charts"] + ([fred_mod["fedbs"]["comp_chart"]] if fred_mod["fedbs"].get("comp_chart") else [])
                + ([fred_mod["fedbs"]["netliq_chart"]] if fred_mod["fedbs"].get("netliq_chart") else []) + fred_mod["fedbs"]["card_charts"],
@@ -3290,6 +3312,7 @@ def B(name):
 
 _hs = health.summary()
 _amp_badge_state = _amp_state
+_recovery_badge = layout_render.state_badge("context", "{} MET".format(delever["text"]) if sig_eval else "NO DATA")
 _lpi_badge = _lpi_global_state()
 _tail_fold = ([('<div class="tail-readout">' + tail_readout + '</div>')] if (tail_ok and tail_readout) else []) + \
              ['<details class="fp-expand"><summary>Full conditional tail table and bootstrap chart</summary>'] + B("tail") + ['</details>']
@@ -3302,23 +3325,25 @@ _fund_body = B("funding") + B("fastcards")
 ordered = (
     B("header") + B("overview")
     + B("l1_hdr")
-    + [layout_render.sec_open("sec-lpi", "Liquidity Pressure Index", "流动性压力指数 LPI", "open", layout_render.state_badge(_lpi_badge), "section-lpi")]
+    + [layout_render.sec_open("sec-lpi", "Liquidity Pressure Index (backdrop, weekly)", "流动性压力指数 LPI · 背景", "closed", layout_render.state_badge(_lpi_badge), "section-lpi")]
     + B("lpi_gauge") + B("lpi_factors") + B("lpi_charts") + _tail_fold + [layout_render.sec_close()]
     + B("l2_hdr")
-    + [layout_render.sec_open("sec-funding", "Funding &amp; plumbing", "资金与流动性", "closed", layout_render.state_badge(_fund_state), "section-funding")]
+    + [layout_render.sec_open("sec-funding", "Funding &amp; plumbing", "资金与流动性", "closed", layout_render.state_badge(_fund_badge), "section-funding")]
     + _fund_body + [layout_render.sec_close()]
     + [layout_render.sec_open("sec-fedbs", "Fed balance sheet &amp; RMP", "美联储资产负债表与储备管理购债", "closed", layout_render.state_badge("context"))]
     + B("fedbs") + [layout_render.sec_close()]
-    + [layout_render.sec_open("sec-credit", "Credit", "信用", "closed", layout_render.state_badge(fred_mod["credit"]["state"]))]
+    + [layout_render.sec_open("sec-credit", "Credit", "信用", "closed", layout_render.state_badge(_credit_badge))]
     + B("credit") + [layout_render.sec_close()]
-    + [layout_render.sec_open("sec-rates", "Rates &amp; term premium", "利率与期限溢价", "closed", layout_render.state_badge(fred_mod["rates"]["state"]))]
+    + [layout_render.sec_open("sec-rates", "Rates &amp; term premium", "利率与期限溢价", "closed", layout_render.state_badge(_rates_badge))]
     + B("rates") + [layout_render.sec_close()]
     + B("l3_hdr")
     + [layout_render.sec_open("sec-crowding", "Crowding", "拥挤度", "closed", layout_render.state_badge(_basis_global_state()), "section-crowding")]
     + B("conc") + B("ai") + B("breadth") + B("cot") + B("basis") + [layout_render.sec_close()]
     + B("l4_hdr")
     + [layout_render.sec_open("sec-amplifiers", "Amplifiers &amp; triggers", "放大器与触发器", "closed", layout_render.state_badge(_amp_badge_state), "section-amplifiers")]
-    + B("signals") + B("confirm") + B("tape") + B("gex") + [layout_render.sec_close()]
+    + B("tape") + B("gex") + [layout_render.sec_close()]
+    + [layout_render.sec_open("sec-recovery", "Recovery signals", "修复信号 · de-lever", "closed", _recovery_badge, "section-recovery")]
+    + B("signals") + B("confirm") + [layout_render.sec_close()]
     + _cal + _methods
     + B("js")
 )

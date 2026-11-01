@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 import json
 import os
+import re
 import time
 
 import numpy as np
@@ -157,6 +158,105 @@ def normalize_funding(value: Any, source: str) -> float | None:
         return None
     pct = v if source.lower() == "coingecko" else v * 100.0
     return pct if abs(pct) <= FUNDING_MAX_ABS_PCT_8H else None
+
+
+TREASURYDIRECT_AUCTIONED_URL = "https://www.treasurydirect.gov/TA_WS/securities/auctioned?format=json&days=120"
+SUPPLY_WINDOW_WEEKS = 13        # one full quarterly refunding cycle; a 4-week sum swings with the auction calendar
+COUPON_MIN_YEARS = 1.5          # 2-year notes and longer; bills and CMBs are not duration supply
+_TERM_RE = re.compile(r"(\d+)-Year(?:\s+(\d+)-Month)?")
+
+
+def term_years(term: Any) -> float:
+    """Years to maturity from a Treasury term label. Reopenings carry labels such as
+    "9-Year 10-Month" or "29-Year 11-Month"; an exact-label filter drops them."""
+    m = _TERM_RE.match(str(term or "").strip())
+    if not m:
+        return float("nan")
+    return int(m.group(1)) + int(m.group(2) or 0) / 12.0
+
+
+def _is_yes(v: Any) -> bool:
+    return str(v).strip().lower() in ("yes", "true", "y")
+
+
+def coupon_supply_frame(fiscal_rows: Iterable[dict[str, Any]], td_rows: Iterable[dict[str, Any]] | None = None) -> pd.DataFrame:
+    """Coupon auctions (notes and bonds, nominal and TIPS, original issues and reopenings),
+    FRNs excluded. FiscalData supplies the long history; TreasuryDirect fills auctions that
+    FiscalData has not published yet. Rows are de-duplicated on (CUSIP, auction date) with
+    FiscalData preferred. Amounts are offering amounts in dollars."""
+    rows = []
+    for r in fiscal_rows or []:
+        if str(r.get("security_type", "")).strip() not in ("Note", "Bond") or _is_yes(r.get("floating_rate")):
+            continue
+        rows.append({"cusip": r.get("cusip"), "auction_date": r.get("auction_date"), "term": r.get("security_term"),
+                     "amount": r.get("offering_amt"), "source": "FiscalData"})
+    for r in td_rows or []:
+        if str(r.get("securityType", "")).strip() not in ("Note", "Bond") or _is_yes(r.get("floatingRate")):
+            continue
+        rows.append({"cusip": r.get("cusip"), "auction_date": str(r.get("competitiveAuctionCloseDate") or r.get("auctionDate") or "")[:10],
+                     "term": r.get("securityTerm"), "amount": r.get("offeringAmount"), "source": "TreasuryDirect"})
+    if not rows:
+        return pd.DataFrame(columns=["cusip", "auction_date", "term", "amount", "years", "source"])
+    df = pd.DataFrame(rows)
+    df["auction_date"] = pd.to_datetime(df["auction_date"], errors="coerce")
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+    df["years"] = df["term"].map(term_years)
+    df = df.dropna(subset=["auction_date", "amount"])
+    df = df[df["years"] >= COUPON_MIN_YEARS]
+    df = df.sort_values("source").drop_duplicates(subset=["cusip", "auction_date"], keep="first")   # FiscalData < TreasuryDirect
+    return df.sort_values("auction_date").reset_index(drop=True)
+
+
+def coupon_supply_weekly(frame: pd.DataFrame, known_through: date) -> pd.Series:
+    """Weekly (W-WED) coupon offering amounts in $ billions on a gap-free grid that ends at the
+    week containing ``known_through``, the last date for which the auction record is complete.
+    Quiet weeks inside the grid are true zeros; weeks after ``known_through`` are not emitted,
+    so a source publication lag can no longer read as zero issuance."""
+    if frame.empty:
+        return pd.Series(dtype=float)
+    f = frame[frame["auction_date"] <= pd.Timestamp(known_through)]
+    if f.empty:
+        return pd.Series(dtype=float)
+    wk = f.set_index("auction_date")["amount"].resample("W-WED").sum() / 1e9
+    end = pd.Timestamp(known_through).to_period("W-WED").end_time.normalize()
+    grid = pd.date_range(wk.index.min(), max(end, wk.index.max()), freq="W-WED")
+    return wk.reindex(grid, fill_value=0.0).fillna(0.0)
+
+
+def fetch_coupon_supply(*, start: str = "2003-01-01", session=None) -> dict[str, Any]:
+    """Fetch FiscalData (history) and TreasuryDirect (last 120 days). Returns the weekly
+    series, the frame, the known-through date and source notes."""
+    http = session or requests.Session()
+    out: dict[str, Any] = {"errors": {}}
+    fiscal: list[dict[str, Any]] = []
+    params = {"fields": "cusip,auction_date,offering_amt,security_term,security_type,floating_rate,total_accepted",
+              "filter": "security_type:in:(Note,Bond),auction_date:gte:" + start,
+              "sort": "-auction_date", "page[size]": "10000", "page[number]": "1"}
+    try:
+        fiscal = _get(TREASURY_AUCTIONS_URL, params=params, timeout=50, retries=3, session=http).json().get("data", [])
+    except Exception as exc:
+        out["errors"]["fiscaldata"] = str(exc)
+    td: list[dict[str, Any]] = []
+    try:
+        td = _get(TREASURYDIRECT_AUCTIONED_URL, timeout=40, retries=2, session=http).json()
+        if not isinstance(td, list):
+            raise ValueError("unexpected TreasuryDirect payload")
+    except Exception as exc:
+        td = []
+        out["errors"]["treasurydirect"] = str(exc)
+    today = utc_now().date()
+    frame = coupon_supply_frame(fiscal, td)
+    frame = frame[frame["auction_date"] <= pd.Timestamp(today)]
+    if td:
+        known = today
+    else:
+        done = [pd.Timestamp(r["auction_date"]) for r in fiscal
+                if str(r.get("total_accepted", "null")) not in ("null", "", "None") and r.get("auction_date")]
+        known = max(done).date() if done else (frame["auction_date"].max().date() if not frame.empty else today)
+    out.update({"frame": frame, "weekly": coupon_supply_weekly(frame, known), "known_through": known,
+                "source": "FiscalData auctions_query + TreasuryDirect" if td else "FiscalData auctions_query",
+                "n_td_only": int((frame["source"] == "TreasuryDirect").sum()) if not frame.empty else 0})
+    return out
 
 
 def weekly_issuance_grid(auctions: pd.DataFrame, today: date) -> pd.Series:
@@ -1354,8 +1454,8 @@ def delever_tally(signals: dict[str, bool | None]) -> dict[str, Any]:
 LPI_BAND_TABLE = (
     (40.0, "#10b981", "green", "Low: cushion thick 缓冲充足"),
     (60.0, "#f59e0b", "yellow", "Neutral: watch for inflection 中性"),
-    (80.0, "#f97316", "orange", "Elevated: reduce leverage, widen hedges 偏高"),
-    (float("inf"), "#ef4444", "red", "Extreme: defensive sizing 极端"),
+    (80.0, "#f97316", "orange", "Elevated: cushion thin; see the chain for the stance 偏高"),
+    (float("inf"), "#ef4444", "red", "Extreme: cushion very thin; see the chain 极端"),
 )
 
 
