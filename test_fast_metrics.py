@@ -608,3 +608,30 @@ class LpiFreshnessAndLabelTests(unittest.TestCase):
         out = fm.ai_breadth_and_rs(df)
         self.assertTrue(out["available"])
         self.assertEqual(out["valid50"], len(fm.AI_BASKET) - 1)
+
+
+class MarketTapeTests(unittest.TestCase):
+    def _frame(self, n=80):
+        idx = pd.bdate_range(end="2026-10-30", periods=n)
+        close = pd.DataFrame({"SPY": [100.0 + i for i in range(n)], "RSP": [50.0] * n,
+                              "GLD": [200.0] * (n - 1) + [210.0]}, index=idx)
+        vol = pd.DataFrame({"SPY": [10.0] * (n - 1) + [30.0]}, index=idx)
+        return close, vol
+
+    def test_ratios_assets_and_volume(self):
+        close, vol = self._frame()
+        out = fm.market_tape(close, vol, now=datetime(2026, 10, 31, 12, tzinfo=timezone.utc))
+        self.assertTrue(out["available"])
+        self.assertEqual(out["observation_date"], "2026-10-30")
+        r = out["ratios"]["RSP"]
+        expect = (50 / 179 / (50 / 159) - 1) * 100
+        self.assertAlmostEqual(r["chg20"], expect, places=6)
+        self.assertAlmostEqual(out["assets"]["GLD"]["ret1"], 5.0, places=6)
+        # volume ratio uses the prior 20 sessions only (today excluded)
+        self.assertAlmostEqual(out["spy_volume"]["ratio"], 3.0, places=6)
+        self.assertNotIn("IWM", out["ratios"])
+
+    def test_missing_spy(self):
+        close, _ = self._frame()
+        self.assertFalse(fm.market_tape(close.drop(columns="SPY"))["available"])
+        self.assertFalse(fm.market_tape(pd.DataFrame())["available"])

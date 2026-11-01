@@ -35,6 +35,7 @@ CSS = (
     ".sh-sub{font-size:11px;color:var(--faint);margin-top:2px;max-width:520px}"
     ".sh-vals{display:flex;gap:22px;flex-wrap:wrap}.sh-vals b{display:block;font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--text)}"
     ".sh-vals b.sh-rule{font-size:14px;line-height:1.5}.sh-vals b.sh-rule.on{color:var(--elev)}.sh-vals b.sh-rule.near{color:var(--watch)}.sh-vals b.sh-rule.off{color:var(--ok)}"
+    ".sh-where b{max-width:240px}"
     ".sh-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}"
     ".sh-ranges{display:flex;gap:6px}.sofr-hero-range{background:#1e2433;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer}.sofr-hero-range.active{background:var(--accent);color:#fff;border-color:var(--accent)}"
     ".sofr-hero-chart{width:100%;margin-top:6px}.sh-note{font-size:11px;color:var(--faint);margin-top:6px;line-height:1.5}"
@@ -108,18 +109,24 @@ def scorecard_html(tiles: list[dict[str, Any]]) -> str:
     return "".join(out)
 
 
-def sofr_hero_html(latest: str, median: str, rule: str, rule_cls: str, obs: str, detail: str, since: str, available: bool) -> str:
+def sofr_hero_html(latest: str, median: str, rule: str, rule_cls: str, obs: str, detail: str, since: str, available: bool,
+                   effr: str = "n/a", where: str = "", where_cls: str = "off") -> str:
     btns = "".join('<button type="button" class="sofr-hero-range{}" data-days="{}">{}</button>'.format(
         " active" if lbl == "6M" else "", days, lbl) for lbl, days in (("3M", 92), ("6M", 183), ("1Y", 365), ("3Y", 1096), ("Max", 0)))
     body = ('<div id="chart-sofr-hero" class="sofr-hero-chart"></div>' if available else
             '<div class="mod-note">SOFR minus IORB is unavailable or stale this run; no current value is shown.</div>')
-    return ('<div class="sofr-hero" id="sofr-hero" data-testid="sofr-hero"><div class="sh-head"><div><div class="sh-title">SOFR minus IORB monitor <span>资金价格监测</span></div>'
-            '<div class="sh-sub">basis points, daily since {since} &middot; raw print and 5-observation median that skips calendar-noise days</div></div>'
-            '<div class="sh-vals"><div><span class="sh-lbl">Latest</span><b>{latest}</b></div><div><span class="sh-lbl">5d median</span><b>{median}</b></div>'
-            '<div><span class="sh-lbl">Strategy rule</span><b class="{rcls}">{rule}</b></div></div>'
+    return ('<div class="sofr-hero" id="sofr-hero" data-testid="sofr-hero"><div class="sh-head"><div><div class="sh-title">SOFR and EFFR minus IORB monitor <span>资金价格监测:回购与银行间</span></div>'
+            '<div class="sh-sub">basis points, daily since {since} &middot; SOFR raw print, SOFR 5-observation median that skips calendar-noise days, and EFFR minus IORB for the interbank market</div></div>'
+            '<div class="sh-vals"><div><span class="sh-lbl">SOFR latest</span><b>{latest}</b></div><div><span class="sh-lbl">SOFR 5d median</span><b>{median}</b></div>'
+            '<div><span class="sh-lbl">Strategy rule</span><b class="sh-rule {rcls}">{rule}</b></div>'
+            '<div><span class="sh-lbl">EFFR - IORB</span><b data-testid="hero-effr">{effr}</b></div>'
+            '<div class="sh-where"><span class="sh-lbl">Where the pressure is</span><b class="sh-rule {wcls}" data-testid="hero-where">{where}</b></div></div>'
             '<div class="sh-ranges">{btns}</div></div>{body}'
-            '<div class="sh-note">{obs} &middot; {detail}. The +3bp line is the operator strategy threshold, not an empirical law. Source: NY Fed SOFR and Federal Reserve IORB.</div></div>').format(
-        since=e(since), latest=e(latest), median=e(median), rule=e(rule), rcls=e(rule_cls), btns=btns, body=body, obs=e(obs), detail=e(detail))
+            '<div class="sh-note">{obs} &middot; {detail}. SOFR is a secured repo rate (cash lent against Treasuries); EFFR is the unsecured rate banks pay each other for reserves. '
+            'SOFR above IORB while EFFR stays below IORB points to collateral and dealer balance-sheet pressure; EFFR rising to IORB points to scarce reserves. '
+            'The +3bp line is the operator strategy threshold, not an empirical law. Source: NY Fed SOFR, FRED EFFR and Federal Reserve IORB.</div></div>').format(
+        since=e(since), latest=e(latest), median=e(median), rule=e(rule), rcls=e(rule_cls), btns=btns, body=body, obs=e(obs), detail=e(detail),
+        effr=e(effr), where=e(where), wcls=e(where_cls))
 
 
 def changes_html(items: list[str], base_note: str) -> str:

@@ -86,13 +86,56 @@ Every source registers a name, provider, last observation date, cadence and stat
 
 `hgex-state` stores up to 400 daily SPY/QQQ gamma snapshots; `dash-state` stores 45 daily scorecard snapshots. Both live inside `index.html` because the workflow commits only generated files. A locally generated `index.html` must not be committed over the hosted one.
 
-### FRED data dictionary
+### Secured repo versus interbank funding (v3)
+
+Two overnight markets are compared with IORB, the rate the Fed pays on reserve balances.
+
+* Secured repo: SOFR (all Treasury repo), BGCR (tri-party plus GCF) and TGCR (tri-party only). Cash is lent against Treasury collateral. These rates rise when dealers need cash to finance Treasury inventory or settlement, or when cash leaves money funds for the TGA. They measure collateral and dealer balance-sheet pressure.
+* Unsecured interbank: EFFR (fed funds, about $0.1T, mostly FHLB lending) and OBFR (fed funds plus Eurodollar, about $0.2T). These rates rise toward IORB when banks bid for reserves. They measure reserve scarcity directly.
+
+Classification (`fred_monitor.funding_locus`), using the SOFR - IORB 5-observation non-calendar median and EFFR - IORB:
+
+| Secured median >= +3 bp | EFFR - IORB >= 0 bp, or 20-observation rise >= +2 bp | Locus |
+|---|---|---|
+| yes | yes | broad (repo and interbank both tight; the pattern of scarce reserves) |
+| yes | no | secured (collateral and dealer pressure; reserves not scarce) |
+| no | yes | unsecured (unusual; check bank-specific funding) |
+| no | no | calm |
+
+EFFR - IORB state is an exception to the percentile rule (D2): EFFR - IORB moved from about -7 bp (2023 to August 2025) to about -2 bp by November 2025 and has stayed there, so a 3-year percentile reads near the top without any new change. The state uses the IORB anchor instead: watch at or above -1 bp or on a 20-observation rise of +2 bp or more; elevated at or above 0 bp. The thresholds are operator references. The locus and these states are descriptive and do not enter the LPI, a composite or the de-lever tally (D6).
+
+### Net liquidity decomposition (v3)
+
+Net liquidity = Fed total assets (WALCL) - TGA (WTREGEN) - ON RRP (RRPONTSYD), in $ billions, on H.4.1 Wednesdays where all three exist. ON RRP is daily; the Wednesday value is used, or the latest print within three days before it. Rows stop at the last common Wednesday; no series is forward-filled. Weekly contributions: +change in assets, -change in TGA, -change in ON RRP; they sum to the change in net liquidity.
+
+The result depends on the window and the end date. H.4.1 uses Wednesday levels, while the Daily Treasury Statement gives daily TGA balances, so a 5-business-day sum built from DTS data will differ from the 1-week H.4.1 change. A single week near tax dates, month-end or coupon settlement can reverse the sign. The card shows 1w and 4w changes; the chart shows every weekly contribution so the reader can see which leg moved.
+
+### Market tape (v3)
+
+Daily adjusted closes from Yahoo Finance: RSP/SPY, IWM/SPY and QQQ/SPY ratios (20-day percent change and its 3-year percentile, 50-day average), SPY volume divided by the average of the prior 20 sessions (today excluded), and GLD and USO 1, 5 and 20-day returns. These are context. A falling RSP/SPY ratio means fewer stocks carry the index; a volume ratio near 2x on a down day signals forced or hedging flow. None enters the LPI, a composite or the de-lever tally.
+
+### Other v3 cards
+
+* HY - IG OAS (BAMLH0A0HYM2 - BAMLC0A0CM), bp: the extra spread paid for high-yield risk over investment grade.
+* 2-year Treasury yield (DGS2) and 10Y/2Y realized volatility: standard deviation of daily yield changes over 20 sessions, times the square root of 252, in bp.
+* 3-month T-bill minus SOFR (DTB3 - SOFR), bp. DTB3 is quoted on a discount basis, so the level carries a small negative bias; changes are more informative than the level.
+
+### Data dictionary (FRED and NY Fed series)
+
+All series are fetched from fredgraph.csv except BGCR and BGCRVOL, which come from the [NY Fed Markets reference-rates API](https://markets.newyorkfed.org/api/rates/secured/bgcr/search.json) because FRED does not carry BGCR. NY Fed series use the same merge-only cache (`data/fred-cache/NYFED_<id>.csv`).
 
 | Series | Label | Section | Raw unit | Display | Cadence | Max age (days) | Role |
 |---|---|---|---|---|---|---|---|
 | [SOFR](https://fred.stlouisfed.org/series/SOFR) | SOFR | funding | percent | pct | daily business day | 5 | context |
 | [IORB](https://fred.stlouisfed.org/series/IORB) | IORB | funding | percent | pct | daily business day | 10 | context |
 | [TGCRRATE](https://fred.stlouisfed.org/series/TGCRRATE) | Tri-party general collateral rate | funding | percent | pct | daily business day | 5 | state |
+| [EFFR](https://fred.stlouisfed.org/series/EFFR) | Effective federal funds rate | funding | percent | pct | daily business day | 5 | state |
+| [OBFR](https://fred.stlouisfed.org/series/OBFR) | Overnight bank funding rate | funding | percent | pct | daily business day | 5 | context |
+| [EFFRVOL](https://fred.stlouisfed.org/series/EFFRVOL) | Effective federal funds volume | funding | billions | $B | daily business day | 5 | context |
+| [OBFRVOL](https://fred.stlouisfed.org/series/OBFRVOL) | Overnight bank funding volume | funding | billions | $B | daily business day | 5 | context |
+| [TGCRVOLUME](https://fred.stlouisfed.org/series/TGCRVOLUME) | Tri-party general collateral rate volume | funding | billions | $B | daily business day | 5 | context |
+| [BGCR](https://www.newyorkfed.org/markets/reference-rates/bgcr) | Broad general collateral rate (NY Fed) (NY Fed) | funding | percent | pct | daily business day | 5 | context |
+| [BGCRVOL](https://www.newyorkfed.org/markets/reference-rates/bgcr) | Broad general collateral rate volume (NY Fed) (NY Fed) | funding | billions | $B | daily business day | 5 | context |
 | [SOFR1](https://fred.stlouisfed.org/series/SOFR1) | SOFR 1st percentile | funding | percent | pct | daily business day | 5 | context |
 | [SOFR25](https://fred.stlouisfed.org/series/SOFR25) | SOFR 25th percentile | funding | percent | pct | daily business day | 5 | context |
 | [SOFR75](https://fred.stlouisfed.org/series/SOFR75) | SOFR 75th percentile | funding | percent | pct | daily business day | 5 | context |
@@ -108,6 +151,7 @@ Every source registers a name, provider, last observation date, cadence and stat
 | [WSHONBNL](https://fred.stlouisfed.org/series/WSHONBNL) | SOMA Treasury notes and bonds (nominal) | fedbs | millions | $B | weekly (H.4.1, Wednesday level, Thursday release) | 12 | context |
 | [WSHOMCB](https://fred.stlouisfed.org/series/WSHOMCB) | SOMA mortgage-backed securities | fedbs | millions | $B | weekly (H.4.1, Wednesday level, Thursday release) | 12 | context |
 | [WSEFINTL1](https://fred.stlouisfed.org/series/WSEFINTL1) | Securities held in custody for foreign official accounts | fedbs | millions | $T | weekly (H.4.1, Wednesday level, Thursday release) | 12 | context |
+| [RRPONTSYD](https://fred.stlouisfed.org/series/RRPONTSYD) | Overnight reverse repo (ON RRP) take-up | fedbs | billions | $B | daily business day | 5 | context |
 | [WALCL](https://fred.stlouisfed.org/series/WALCL) | Fed total assets | fedbs | millions | $T | weekly (H.4.1, Wednesday level, Thursday release) | 12 | context |
 | [WRESBAL](https://fred.stlouisfed.org/series/WRESBAL) | Reserve balances at Federal Reserve Banks | fedbs | millions | $T | weekly (H.4.1, Wednesday level, Thursday release) | 12 | context |
 | [WTREGEN](https://fred.stlouisfed.org/series/WTREGEN) | Treasury General Account | fedbs | millions | $T | weekly (H.4.1, Wednesday level, Thursday release) | 12 | context |

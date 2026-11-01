@@ -69,7 +69,8 @@ for _key, _label, _src in (("vix", "VIX term structure", "Cboe / FRED"), ("reser
                            ("tga_level", "Treasury General Account", "Treasury DTS / H.4.1"),
                            ("sofr_iorb", "SOFR minus IORB", "NY Fed / FRB"), ("sofr_tail", "SOFR 99th percentile", "NY Fed"),
                            ("repo", "NY Fed repo operations", "NY Fed"), ("concentration", "S&P 500 concentration", "SSGA SPY holdings"),
-                           ("ai", "AI basket breadth", "Yahoo Finance")):
+                           ("ai", "AI basket breadth", "Yahoo Finance"),
+                           ("tape", "Breadth ratios, SPY volume, GLD/USO", "Yahoo Finance")):
     _m = fast.get(_key) or {}
     _f = _m.get("freshness") or {}
     _stale = bool(_f.get("stale", True))
@@ -1976,7 +1977,72 @@ for _etf, _d in ai.get("rs", {}).items():
     _chg = ("{} 60d {:+.1f}%".format("▲" if _d.get("change60", 0) >= 0 else "▼", _d.get("change60", 0) * 100)) if _rv else ""
     rs_cards += _fast_card(_etf + " / SPY", _value, _sub, _metric, "normal", _details, _rs_chart, _chg)
 
+def _effr_aligned(dates):
+    ef, io = fred_series.get("EFFR"), fred_series.get("IORB")
+    if ef is None or io is None or not dates:
+        return []
+    sp = fred_monitor.spread(ef.dropna(), io.dropna(), 100.0)
+    m = {d.strftime("%Y-%m-%d"): round(float(v), 1) for d, v in sp.items()}
+    return [m.get(d) for d in dates]
+
+
+_where = fred_mod["funding"].get("where") or {}
+# --- Market tape (descriptive; outside the LPI, every composite and the de-lever tally, D6) ---
+tape = fast.get("tape", {}) or {}
+_tape_m = {"available": tape.get("available"), "freshness": tape.get("freshness", {}), "observation_date": tape.get("observation_date")}
+_TAPE_TXT = {
+    "RSP": ("Equal-weight vs cap-weight (RSP / SPY)", "等权相对市值加权",
+            "Adjusted-close ratio of the equal-weight S&amp;P 500 ETF (RSP) to SPY.",
+            "A rising ratio means the average stock is beating the index heavyweights, so gains are broadening; a falling ratio means the index depends on a few large names."),
+    "IWM": ("Small caps vs large caps (IWM / SPY)", "小盘相对大盘",
+            "Adjusted-close ratio of the Russell 2000 ETF (IWM) to SPY.",
+            "Small caps borrow at floating rates and depend on domestic growth and credit. Underperformance often accompanies tighter funding or credit conditions."),
+    "QQQ": ("Nasdaq-100 vs S&amp;P 500 (QQQ / SPY)", "纳指相对标普",
+            "Adjusted-close ratio of the Nasdaq-100 ETF (QQQ) to SPY.",
+            "Tracks whether the crowded mega-cap growth trade is leading or being sold. A sharp fall is de-crowding of the leadership group."),
+}
+breadth_cards = ""
+for _t, (_ttl, _zh, _def, _why) in _TAPE_TXT.items():
+    _d = (tape.get("ratios") or {}).get(_t)
+    if not _d:
+        continue
+    _cid = "fcc-tape-" + _t.lower()
+    _ch = _fast_chart(_cid, "ratio", [(_t + " / SPY", "#38bdf8", _d["dates"], _d["history"], "scatter")], band=(20, "20d {:+.1f}%".format(_d["chg20"])))
+    _sub = "20d {:+.2f}% (pctile {:.0f} vs 3y of 20d moves) · 5d {:+.2f}% · vs 50d average {:.4f}".format(_d["chg20"], _d["chg20_pctile"], _d["chg5"], _d["ma50"])
+    _det = _metric_details(_t + " / SPY", _def, _why,
+        "Read the 20-day change and its percentile against 3 years of 20-day moves. Context only: no state is assigned.",
+        "https://finance.yahoo.com/quote/" + _t + "/", "daily business day",
+        "Ratios of total-return-adjusted closes from Yahoo Finance. ETF fees and rebalancing make small long-run drifts.", _tape_m)
+    breadth_cards += _fast_card(_ttl + " · " + _zh, "{:.4f}".format(_d["current"]), _sub, _tape_m, "context", _det, _ch,
+                                ("{} 20d {:+.1f}%".format("▲" if _d["chg20"] >= 0 else "▼", _d["chg20"])))
+tape_cards = ""
+_sv = tape.get("spy_volume")
+if _sv:
+    _ret1 = ((tape.get("assets") or {}).get("SPY") or {}).get("ret1", float("nan"))
+    _ch = _fast_chart("fcc-tape-spyvol", "x", [("SPY volume / prior 20d average", "#f59e0b", _sv["dates"], _sv["history"], "bar")],
+                      refs=[{"y": 1.0, "label": "", "color": "#64748b"}, {"y": 2.0, "label": "2.0x operator reference", "color": "#ef4444"}])
+    _det = _metric_details("SPY volume", "SPY shares traded today divided by the average of the previous 20 sessions (today excluded).",
+        "Heavy volume on a down day shows forced or urgent selling: de-leveraging, margin calls or hedging demand. Heavy volume on an up day after a fall can mark capitulation buying.",
+        "Above 1.5x is heavy, above 2x is rare (top few percent of days). Read it with the day's return. Context only: no state is assigned.",
+        "https://finance.yahoo.com/quote/SPY/", "daily business day",
+        "Exchange-traded volume only (no off-exchange detail); option expiry and index rebalance days inflate volume without stress.", _tape_m)
+    tape_cards += _fast_card("SPY volume vs 20-day average · SPY 成交量倍数", "{:.2f}x".format(_sv["ratio"]),
+                             "day return {:+.2f}% · {:.0f}M shares vs {:.0f}M average · pctile {:.0f} vs 2y".format(_ret1, _sv["shares"] / 1e6, _sv["avg20"] / 1e6, _sv["pctile"]),
+                             _tape_m, "context", _det, _ch)
+for _t, _ttl, _why in (("GLD", "Gold (GLD) · 黄金", "Gold falling with equities in a selloff is a sign of cash raising: investors sell what is liquid and in profit to meet margin."),
+                       ("USO", "Oil (USO) · 原油", "A fast oil rise is a supply or geopolitical shock that feeds inflation expectations and limits how far the Fed can ease.")):
+    _a = (tape.get("assets") or {}).get(_t)
+    if not _a:
+        continue
+    _ch = _fast_chart("fcc-tape-" + _t.lower(), "price", [(_t, "#a5b4fc", _a["dates"], _a["history"], "scatter")], band=(20, "20d {:+.1f}%".format(_a["ret20"])))
+    _det = _metric_details(_t, "Adjusted close of the " + _t + " ETF and its 1-, 5- and 20-day returns.", _why,
+        "Cross-asset context for the equity tape. No state is assigned.", "https://finance.yahoo.com/quote/" + _t + "/", "daily business day",
+        "USO holds front-month futures, so roll costs make it drift from spot oil over long windows.", _tape_m)
+    tape_cards += _fast_card(_ttl, "${:,.2f}".format(_a["last"]), "1d {:+.2f}% · 5d {:+.2f}% · 20d {:+.2f}%".format(_a["ret1"], _a["ret5"], _a["ret20"]),
+                             _tape_m, "context", _det, _ch, ("{} 20d {:+.1f}%".format("▲" if _a["ret20"] >= 0 else "▼", _a["ret20"])))
+
 j_sofr_spread = json.dumps({
+    "effr": _effr_aligned(sofr_spread.get("dates", [])),
     "dates": sofr_spread.get("dates", []), "raw": sofr_spread.get("raw_bp", []),
     "filtered": sofr_spread.get("filtered_bp", []), "changes": sofr_spread.get("daily_change_bp", []),
     "flags": sofr_spread.get("calendar_flags", []), "noise": sofr_spread.get("calendar_noise", []),
@@ -2056,6 +2122,10 @@ def build_takeaway():
     f_bits = ["resonance {} ({})".format(fp_summary, fp_headline.lower() if fp_headline else "n/a")]
     f_bits.append("backstops in use {}/{} (SRF, swaps, FIMA repo); discount window {}".format(
         _fm["backstops_in_use"], _fm["backstops_avail"], _fm.get("dw_state", "unavailable").replace("_", " ")))
+    _w = _fm.get("where") or {}
+    if _w.get("key", "na") != "na":
+        f_bits.append("pressure locus: {} (SOFR-IORB 5d median {:+.0f} bp, EFFR-IORB {:+.0f} bp)".format(
+            _w["label_en"].lower(), _w["secured_med_bp"], _w["unsec_bp"]))
     sents.append("Funding: " + "; ".join(f_bits) + ".")
 
     # 3 — Credit and rates
@@ -2152,8 +2222,11 @@ score_tiles = [
      "sub": ("{} · {} · as of {}".format(reg_level, reg_dir, lpi_asof_txt) if lpi_has else "insufficient data")
             + (" · stale" if (lpi_has and lpi_stale) else ""), "spark": _lpi_spark, "target": "sec-lpi"},
     {"id": "funding", "title": "Funding 资金面", "value": "{}/3".format(fp_count) if fp_state != "unavailable" else "N/A",
-     "state": _fund_state, "sub": "SOFR-IORB {} · resonance · backstops in use {}/{}".format(
+     "state": _fund_state, "sub": "SOFR-IORB {} · EFFR-IORB {} · {} · backstops in use {}/{}".format(
          (("{:+.1f} bp".format(float((sofr_spread.get("raw_bp") or [float("nan")])[-1]))) if sofr_spread.get("raw_bp") else "n/a"),
+         (("{:+.0f} bp".format(_where["unsec_bp"])) if _where.get("key", "na") != "na" else "n/a"),
+         ({"broad": "broad: repo and interbank", "secured": "repo pressure, interbank calm", "unsecured": "interbank pressure",
+           "calm": "calm"}.get(_where.get("key", "na"), "locus n/a")),
          _fm["backstops_in_use"], _fm["backstops_avail"]),
      "spark": [float(v) for v in _sofr_f if v == v], "target": "sec-funding"},
     {"id": "credit", "title": "Credit 信用 · HY OAS", "value": _credit_m["hy_value"], "state": _credit_m["state"],
@@ -2213,7 +2286,10 @@ sofr_hero = layout_render.sofr_hero_html(
     leg_sofr.get("state_label", "unavailable") if _sofr_ok else "unavailable",
     {"normal": "off", "approaching": "near", "active": "on", "elevated": "on"}.get(_rule_state, "off"),
     "observation " + str(leg_sofr.get("observation_date") or "n/a") + (" (stale)" if (leg_sofr.get("freshness") or {}).get("stale") else ""),
-    leg_sofr.get("detail", ""), (sofr_spread.get("dates") or ["n/a"])[0], _sofr_ok)
+    leg_sofr.get("detail", ""), (sofr_spread.get("dates") or ["n/a"])[0], _sofr_ok,
+    effr=("{:+.0f} bp".format(_where["unsec_bp"]) if _where.get("key", "na") != "na" else "n/a"),
+    where=(_where.get("label_en", "") if _where.get("key", "na") != "na" else "unavailable"),
+    where_cls={"broad": "on", "secured": "near", "unsecured": "near", "calm": "off"}.get(_where.get("key", "na"), "off"))
 overview_html = layout_render.scorecard_html(score_tiles) + sofr_hero + layout_render.changes_html(wc_items, wc_note)
 
 # Decision-table demonstration (forced combos) + degraded-mode check for logs
@@ -2556,8 +2632,11 @@ for _i, (_en, _cn, _leg, _note) in enumerate(fp_path_nodes):
 _path += ('</div><div class="fp-path-caption"><b>Direction.</b> A rebuilding TGA moves cash from banks to the '
           'Treasury\u2019s account at the Fed, which <b>drains bank reserves</b> one-for-one; a thinner reserve '
           'buffer makes secured overnight funding <b>price above IORB</b>. All three moving together is what the '
-          'strategy overlay treats as resonance.</div></div>')
+          'strategy overlay treats as resonance. Repo can also price above IORB for reasons unrelated to reserves '
+          '(Treasury settlement days, dealer balance sheets, a TGA build that drains money funds). The panel below checks the '
+          'unsecured interbank rate, EFFR, to tell a collateral squeeze from a reserve shortage.</div></div>')
 parts.append(_path)
+parts.append(fred_render.where_html(fred_mod["funding"].get("where") or {}))
 
 parts.append('<div class="fp-overlay-note">' + FP_STRATEGY_NOTE + '</div>')
 parts.append('<div class="read-guide"><b>Read guide.</b> <b>0/3</b> normal, no resonance. <b>1/3</b> watch \u2014 a '
@@ -2742,6 +2821,13 @@ _blk("ai")
 parts.append('<div class="gex-heading" style="margin-top:12px">AI leadership &amp; semiconductor relative strength <span>fast variables · fixed basket</span></div>')
 parts.append('<div class="fast-grid">' + _fast_card('AI basket breadth', ai_value, ai_sub, ai, 'normal', ai_details, ai_chart) + rs_cards + '</div>')
 
+_blk("breadth")
+if breadth_cards:
+    parts.append('<div class="gex-heading" style="margin-top:12px">Market breadth &amp; leadership rotation <span>equal-weight, small caps and Nasdaq against SPY · context</span></div>')
+    parts.append('<div class="fast-grid">' + breadth_cards + '</div>')
+else:
+    parts.append('<div class="gex-note-box">Breadth ratios unavailable this run (Yahoo Finance).</div>')
+
 _blk("l4_hdr")
 parts.append('<div class="layer-header">第四层 · 放大器与触发器 Amplifiers &amp; Triggers '
              + '<span>de-lever bottom signals + dealer gamma</span><span class="tf">hours–days</span></div>')
@@ -2796,6 +2882,11 @@ parts.append('<div class="confirm-label">Signals confirmed</div>')
 parts.append('<div class="confirm-dots">' + dots + '</div>')
 parts.append('<div class="confirm-text"><strong>' + str(sig_count) + '/' + str(sig_eval) + '</strong> &mdash; <span style="color:' + ccol + '">' + cmsg + '</span></div>')
 parts.append('</div>')
+
+_blk("tape")
+if tape_cards:
+    parts.append('<div class="gex-heading" style="margin-top:12px">Market tape &amp; cross-asset <span>SPY volume, gold, oil · context</span></div>')
+    parts.append('<div class="fast-grid">' + tape_cards + '</div>')
 
 _blk("gex")
 # Homebrew Index GEX section (SPY + QQQ)
@@ -2943,11 +3034,12 @@ parts.append('  Plotly.newPlot("chart-sofr-iorb",sfrTraces,sfrLayout,CFG);')
 parts.append('  FP_PANELS.push({id:"chart-sofr-iorb",dates:SFR.dates,series:[SFR.raw,SFR.filtered],must:[0,3]});sfrIds.push("chart-sofr-iorb");')
 parts.append('  var heroEl=document.getElementById("chart-sofr-hero");')
 parts.append('  if(heroEl){var heroTr=[{x:SFR.dates,y:SFR.raw,type:"scatter",mode:"lines",name:"Raw daily",line:{color:"#64748b",width:1.2},customdata:rawCd,hovertemplate:"%{x}<br>raw %{y:+.1f} bp<br>%{customdata}<extra></extra>"},')
-parts.append('    {x:SFR.dates,y:SFR.filtered,type:"scatter",mode:"lines",name:"5d median (non-calendar)",line:{color:"#a5b4fc",width:3},customdata:rawCd,hovertemplate:"%{x}<br>5d median %{y:+.1f} bp<br>%{customdata}<extra></extra>"}];')
+parts.append('    {x:SFR.dates,y:SFR.filtered,type:"scatter",mode:"lines",name:"SOFR - IORB 5d median (non-calendar)",line:{color:"#a5b4fc",width:3},customdata:rawCd,hovertemplate:"%{x}<br>SOFR 5d median %{y:+.1f} bp<br>%{customdata}<extra></extra>"}];')
+parts.append('    if(SFR.effr&&SFR.effr.some(function(v){return v!==null;})){heroTr.push({x:SFR.dates,y:SFR.effr,type:"scatter",mode:"lines",connectgaps:true,name:"EFFR - IORB (interbank, unsecured)",line:{color:"#2dd4bf",width:2.4},hovertemplate:"%{x}<br>EFFR - IORB %{y:+.0f} bp<extra></extra>"});}')
 parts.append('    var heroLay=Object.assign({},T,{height:FP_NARROW?220:280,hovermode:"x unified",showlegend:!FP_NARROW,legend:{orientation:"h",font:{size:12},y:1.12,x:0},margin:{l:48,r:12,t:FP_NARROW?10:26,b:30},shapes:sfrShapes,annotations:sfrAnn,xaxis:Object.assign({},T.xaxis,{type:"date",nticks:FP_NARROW?5:8}),yaxis:Object.assign({},T.yaxis,{title:{text:"bp",font:{size:12}},zeroline:false})});')
 parts.append('    Plotly.newPlot("chart-sofr-hero",heroTr,heroLay,CFG);sfrIds.push("chart-sofr-hero");')
 parts.append('    function heroFit(days){var n=SFR.dates.length,last=new Date(SFR.dates[n-1]+"T00:00:00Z"),first=days?new Date(last.getTime()-days*86400000):new Date(SFR.dates[0]+"T00:00:00Z");var lo=0,hi=3;')
-parts.append('      for(var i=0;i<n;i++){if(new Date(SFR.dates[i]+"T00:00:00Z")>=first){[SFR.raw[i],SFR.filtered[i]].forEach(function(v){if(fpNum(v)){lo=Math.min(lo,v);hi=Math.max(hi,v);}});}}')
+parts.append('      for(var i=0;i<n;i++){if(new Date(SFR.dates[i]+"T00:00:00Z")>=first){[SFR.raw[i],SFR.filtered[i],(SFR.effr||[])[i]].forEach(function(v){if(fpNum(v)){lo=Math.min(lo,v);hi=Math.max(hi,v);}});}}')
 parts.append('      var pad=Math.max(1,(hi-lo)*0.08);Plotly.relayout("chart-sofr-hero",{"xaxis.range":[first.toISOString().slice(0,10),new Date(last.getTime()+86400000*2).toISOString().slice(0,10)],"yaxis.range":[lo-pad,hi+pad]});}')
 parts.append('    heroFit(183);')
 parts.append('    document.querySelectorAll(".sofr-hero-range").forEach(function(b){b.addEventListener("click",function(){document.querySelectorAll(".sofr-hero-range").forEach(function(x){x.classList.toggle("active",x===b);});heroFit(parseInt(b.getAttribute("data-days"),10));});});}')
@@ -3150,8 +3242,10 @@ parts.append('     xaxis:{type:"date",gridcolor:"#1e2433",tickformat:"%b %d",tic
 parts.append('     yaxis:{gridcolor:"#1e2433",tickfont:{size:12},fixedrange:true,rangemode:"tozero",dtick:1,title:{text:"events",font:{size:12}}}}),CFG);')
 parts.append('  scIds.push("chart-stress-cal");')
 parts.append('}')
-_mfd_charts = {"funding": fred_mod["funding"]["charts"] + fred_mod["funding"]["card_charts"],
-               "fedbs": fred_mod["fedbs"]["charts"] + ([fred_mod["fedbs"]["comp_chart"]] if fred_mod["fedbs"].get("comp_chart") else []) + fred_mod["fedbs"]["card_charts"],
+_mfd_charts = {"funding": fred_mod["funding"]["charts"] + fred_mod["funding"]["card_charts"]
+               + ([fred_mod["funding"]["where"]["chart"]] if (fred_mod["funding"].get("where") or {}).get("chart") else []),
+               "fedbs": fred_mod["fedbs"]["charts"] + ([fred_mod["fedbs"]["comp_chart"]] if fred_mod["fedbs"].get("comp_chart") else [])
+               + ([fred_mod["fedbs"]["netliq_chart"]] if fred_mod["fedbs"].get("netliq_chart") else []) + fred_mod["fedbs"]["card_charts"],
                "credit": fred_mod["credit"]["charts"] + fred_mod["credit"]["card_charts"],
                "rates": fred_mod["rates"]["charts"] + fred_mod["rates"]["card_charts"],
                "crowding": FAST_CHARTS + LPI_FACTOR_CHARTS + GEX_HIST_CHARTS}
@@ -3215,10 +3309,10 @@ ordered = (
     + B("rates") + [layout_render.sec_close()]
     + B("l3_hdr")
     + [layout_render.sec_open("sec-crowding", "Crowding", "拥挤度", "closed", layout_render.state_badge(_basis_global_state()), "section-crowding")]
-    + B("conc") + B("ai") + B("cot") + B("basis") + [layout_render.sec_close()]
+    + B("conc") + B("ai") + B("breadth") + B("cot") + B("basis") + [layout_render.sec_close()]
     + B("l4_hdr")
     + [layout_render.sec_open("sec-amplifiers", "Amplifiers &amp; triggers", "放大器与触发器", "closed", layout_render.state_badge(_amp_badge_state), "section-amplifiers")]
-    + B("signals") + B("confirm") + B("gex") + [layout_render.sec_close()]
+    + B("signals") + B("confirm") + B("tape") + B("gex") + [layout_render.sec_close()]
     + _cal + _methods
     + B("js")
 )

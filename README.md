@@ -88,6 +88,12 @@ Month-end, quarter-end, major US corporate estimated-tax dates (April/June/Septe
 
 Positive SOFR − IORB means secured overnight funding trades above the Fed's administered reserve rate. It is a stress confirmation signal — especially with repo use and SOFR-tail widening — not a stand-alone market-top predictor.
 
+### SOFR − IORB measures repo; EFFR − IORB measures reserves
+
+SOFR is a secured rate: cash lent overnight against Treasury collateral. It rises above IORB when dealers need cash to carry Treasuries or when the TGA pulls cash out of money funds. EFFR is the unsecured rate banks pay each other for reserves; it rises toward IORB when reserves become scarce. The hero chart plots both, and the Funding section adds a "Where is the funding pressure?" panel (SOFR, BGCR, TGCR, OBFR and EFFR minus IORB, with volumes) that classifies the locus as broad, secured, unsecured or calm. BGCR comes from the NY Fed Markets API because FRED does not carry it. EFFR − IORB uses an IORB-anchored rule instead of a percentile because of its 2025 level shift. See METHODOLOGY.md.
+
+The Fed balance sheet section opens with net liquidity (Fed assets − TGA − ON RRP, H.4.1 Wednesdays) and a weekly contribution chart. The figure depends on window and end date and differs from DTS-based daily sums.
+
 ### Reserves and TGA are fetched from official releases, spliced, never interpolated
 
 Both series are read first from the [Federal Reserve H.4.1 release](https://www.federalreserve.gov/releases/h41/current/h41.htm) (Table 1, *Reserve balances with Federal Reserve Banks* and *U.S. Treasury, General Account*, weekly average of daily figures for the week ended Wednesday — the same definition FRED publishes as `WRESBAL` / `WTREGEN`), then from FRED, then from the local versioned cache; the live/preferred tail wins on overlap and nothing is interpolated or forward-filled. `data/fred-cache/H41_WEEKLY.csv` accumulates each parsed release so a fredgraph outage from CI cannot blank the legs. The Daily Treasury Statement operating-cash endpoint is an official daily fallback tail for the TGA only. Each source is fetched in its own isolated try/except, so one failure cannot blank the other two legs.

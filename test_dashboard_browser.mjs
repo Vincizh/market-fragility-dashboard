@@ -321,7 +321,29 @@ try {
     });
     check(`${tag} SOFR-IORB monitor present in overview`, hero.present && hero.drawn && hero.width > 200, JSON.stringify({ w: hero.width }));
     check(`${tag} SOFR-IORB monitor is a line chart with raw and 5d median`, hero.present && hero.lines.length >= 2 && hero.lines.every((l) => l.startsWith('lines:')), (hero.lines || []).join(','));
-    check(`${tag} SOFR-IORB monitor shows latest, median and rule`, hero.present && /Latest/.test(hero.text) && /5d median/.test(hero.text) && /Strategy rule/.test(hero.text) && /[+-]\d+\.\d bp/.test(hero.text));
+    check(`${tag} SOFR-IORB monitor shows latest, median and rule`, hero.present && /latest/i.test(hero.text) && /5d median/.test(hero.text) && /Strategy rule/.test(hero.text) && /[+-]\d+\.\d bp/.test(hero.text));
+    check(`${tag} SOFR hero adds the EFFR - IORB interbank line and readout`, hero.present && hero.lines.some((l) => /EFFR - IORB/.test(l)) && /EFFR - IORB/.test(hero.text) && /Where the pressure is/.test(hero.text), (hero.lines || []).join(','));
+    // Secured vs unsecured diagnostic, net liquidity contributions, new FRED and Yahoo cards
+    const v3 = await page.evaluate(() => {
+      const w = document.querySelector('[data-testid="where-panel"]');
+      const wc = document.getElementById('chart-where');
+      const nl = document.getElementById('chart-netliq-contrib');
+      const cardOk = (sel) => { const c = document.querySelector(sel); if (!c) return 'missing';
+        const ch = c.querySelector('.mfd-chart'); return ch && ch.querySelector('.main-svg') ? 'ok' : 'nochart'; };
+      return { where: !!w, verdict: w ? (w.querySelector('[data-testid="where-verdict"]') || {}).textContent : '',
+        whereLines: wc && wc.data ? wc.data.filter((t) => t.mode === 'lines').length : 0,
+        whereRows: w ? w.querySelectorAll('.where-tbl tbody tr:not(.grp)').length : 0,
+        nlBars: nl && nl.data ? nl.data.filter((t) => t.type === 'bar').length : 0, nlMode: nl && nl._fullLayout ? nl._fullLayout.barmode : '',
+        cards: Object.fromEntries(['[data-testid="mc-effr-iorb"]', '[data-testid="mc-bgcr-iorb"]', '[data-testid="mc-sofr-effr"]', '[data-testid="mc-netliq"]',
+          '[data-testid="mc-hy-ig"]', '[data-testid="mc-rvol"]', '[data-testid="mc-tbill-sofr"]', '[data-testid="mc-dgs2"]'].map((s) => [s, cardOk(s)])),
+        tape: ['fcc-tape-rsp', 'fcc-tape-iwm', 'fcc-tape-qqq', 'fcc-tape-spyvol', 'fcc-tape-gld', 'fcc-tape-uso'].map((i) => { const e = document.getElementById(i); return e && e.querySelector('.main-svg') ? 1 : 0; }) };
+    });
+    check(`${tag} where-is-the-pressure panel with verdict`, v3.where && /repo|interbank|Calm|Broad|Unavailable/i.test(v3.verdict || ''), v3.verdict);
+    check(`${tag} where chart draws five overnight-rate spreads`, v3.whereLines === 5, String(v3.whereLines));
+    check(`${tag} where table lists five rates`, v3.whereRows === 5, String(v3.whereRows));
+    check(`${tag} net-liquidity contribution chart: three stacked bars`, v3.nlBars === 3 && v3.nlMode === 'relative', v3.nlBars + ' ' + v3.nlMode);
+    check(`${tag} new FRED cards drawn with charts`, Object.values(v3.cards).every((x) => x === 'ok'), JSON.stringify(v3.cards));
+    check(`${tag} breadth, volume and cross-asset cards drawn`, v3.tape.every((x) => x === 1), v3.tape.join(''));
     check(`${tag} SOFR-IORB range buttons change the window`, hero.present && hero.spans['92'] < hero.spans['365'] && hero.spans['365'] < hero.spans['0'], JSON.stringify(hero.spans));
     check(`${tag} SOFR-IORB monitor sits above the first layer`, hero.present && hero.visibleTop < 1500, String(Math.round(hero.visibleTop)));
     // Chart-first metric cards: every live card carries its own drawn time series, text sits behind About

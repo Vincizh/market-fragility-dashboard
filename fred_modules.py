@@ -83,8 +83,136 @@ def _fresh(s: pd.Series, spec: fc.FredSpec, now: datetime) -> fm.Freshness:
 # ---------------------------------------------------------------------------
 # 4a Funding extras and backstops
 # ---------------------------------------------------------------------------
+WHERE_SERIES = (("SOFR", "SOFR (all repo)", "#f59e0b"), ("BGCR", "BGCR (tri-party + GCF)", "#a78bfa"),
+                ("TGCRRATE", "TGCR (tri-party)", "#38bdf8"), ("OBFR", "OBFR (bank overnight)", "#94a3b8"),
+                ("EFFR", "EFFR (fed funds)", "#2dd4bf"))
+WHERE_VOL = {"SOFR": "SOFRVOL", "BGCR": "BGCRVOL", "TGCRRATE": "TGCRVOLUME", "OBFR": "OBFRVOL", "EFFR": "EFFRVOL"}
+
+
+def build_where(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
+    """Secured vs unsecured diagnostic: each overnight rate minus IORB, plus a classification
+    of where the pressure sits (descriptive only; outside the LPI and every composite, D6)."""
+    io = _get(S, "IORB")
+    rows: list[dict[str, Any]] = []
+    spreads: dict[str, pd.Series] = {}
+    for sid, name, color in WHERE_SERIES:
+        r = _get(S, sid)
+        if r is None or io is None:
+            rows.append({"id": sid, "name": name, "color": color, "available": False})
+            continue
+        sp = mon.spread(r, io, 100.0)
+        spreads[sid] = sp
+        f = _fresh(r, _spec(sid), now)
+        vol = _get(S, WHERE_VOL[sid])
+        rows.append({"id": sid, "name": name, "color": color, "available": True, "rate": float(r.iloc[-1]),
+                     "bp": float(sp.iloc[-1]), "chg5": mon.change_n(sp, 5), "chg20": mon.change_n(sp, 20),
+                     "vol": float(vol.iloc[-1]) if vol is not None else NAN,
+                     "vol_chg5": mon.change_n(vol, 5) if vol is not None else NAN,
+                     "asof": f.observation_date, "stale": f.stale,
+                     "secured": sid in ("SOFR", "BGCR", "TGCRRATE")})
+    sofr_sp, effr_sp = spreads.get("SOFR"), spreads.get("EFFR")
+    stale = any(r.get("stale") for r in rows if r["id"] in ("SOFR", "EFFR") and r["available"])
+    sec_med = float(sofr_sp.tail(5).median()) if sofr_sp is not None else NAN
+    un_bp = float(effr_sp.iloc[-1]) if effr_sp is not None else NAN
+    un_chg = mon.change_n(effr_sp, 20) if effr_sp is not None else NAN
+    key = "na" if stale else mon.funding_locus(sec_med, un_bp, un_chg)
+    state, label_en, label_zh, why = mon.LOCUS.get(key, ("na", "Unavailable", "不可用", "SOFR, EFFR or IORB is missing or stale this run."))
+    chart = None
+    if spreads:
+        traces = []
+        for sid, name, color in WHERE_SERIES:
+            if sid in spreads:
+                t = _tr(name + " - IORB", color, spreads[sid], digits=0)
+                if sid == "BGCR":
+                    t["dash"] = "dot"
+                if sid == "EFFR":
+                    t["width"] = 3
+                traces.append(t)
+        chart = {"id": "chart-where", "title": "Overnight rates minus IORB · 隔夜利率减 IORB",
+                 "subtitle": "bp. Secured repo: SOFR, BGCR, TGCR. Unsecured bank funding: OBFR, EFFR. 0 = IORB.",
+                 "unit": "bp", "traces": traces, "default_range": "6M", "initial_range": "6M",
+                 "refs": [{"y": 0, "label": "", "color": "#475569"},
+                          {"y": mon.SECURED_ON_BP, "label": "+3 bp", "color": "#f59e0b"}]}
+    asof = max([r["asof"] for r in rows if r.get("available") and r.get("asof")] or [None]) if rows else None
+    return {"key": key, "state": state, "label_en": label_en, "label_zh": label_zh, "why": why,
+            "secured_med_bp": sec_med, "unsec_bp": un_bp, "unsec_chg20_bp": un_chg, "rows": rows,
+            "chart": chart, "asof": asof,
+            "rule": ("Secured on: SOFR - IORB median of the last 5 observations at or above +{:.0f} bp. "
+                     "Unsecured on: EFFR - IORB at or above {:.0f} bp, or up {:.0f} bp or more over 20 observations. "
+                     "Both on = broad; secured only = repo/collateral; unsecured only = interbank; neither = calm.").format(
+                         mon.SECURED_ON_BP, mon.UNSEC_LEVEL_ON_BP, mon.UNSEC_RISE_BP),
+            "links": [(i, fc.BY_ID[i].url) for i in ("SOFR", "BGCR", "TGCRRATE", "OBFR", "EFFR", "IORB")]}
+
+
 def build_funding(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
     cards: list[dict[str, Any]] = []
+    # EFFR - IORB: the interbank (unsecured) gauge
+    ef, io0 = _get(S, "EFFR"), _get(S, "IORB")
+    if ef is not None and io0 is not None:
+        sp = mon.spread(ef, io0, 100.0)
+        f = _fresh(ef, _spec("EFFR"), now)
+        v, c20 = float(sp.iloc[-1]), mon.change_n(sp, 20)
+        pct, yrs = mon.level_pctile(sp, 3)
+        vol = _get(S, "EFFRVOL")
+        cards.append(_card(
+            "effr-iorb", "EFFR minus IORB · 联邦基金利率减 IORB (银行间)", ["EFFR", "IORB", "EFFRVOL"],
+            value=_fmt(v, "bp", 0, True), state=mon.unsecured_state(v, c20),
+            sub="20d {} · 3y pctile {} · volume {}".format(_fmt(c20, "bp", 0, True), _num(pct, 0),
+                                                          _fmt(float(vol.iloc[-1]), "$B", 0) if vol is not None else "n/a"),
+            what="The unsecured overnight rate banks pay each other for reserves, minus the interest the Fed pays on reserves (IORB), in basis points.",
+            asof=f.observation_date, cadence=_spec("EFFR").cadence, stale=f.stale,
+            why="Any bank can earn IORB by leaving reserves at the Fed, so EFFR usually sits below IORB. When reserves become scarce, banks bid more for them and EFFR rises toward or above IORB. This is the direct reserve-scarcity gauge; SOFR - IORB is a repo and collateral gauge.",
+            limits="Fed funds volume is about $0.1T and dominated by FHLB lending, so it is a thin market. EFFR moved from about -7 bp (2023 to Aug 2025) to about -2 bp by Nov 2025 and has stayed there, so the 3y percentile is near the top without a new rise.",
+            spark=mon.spark(sp, 20),
+            rule="Watch at or above -1 bp or a 20-observation rise of +2 bp or more; elevated at or above 0 bp (EFFR at or above IORB). Uses the IORB anchor, not a percentile, because of the 2025 level shift."))
+        cards[-1]["_chart"] = dict(traces=[_tr("EFFR minus IORB", "STATE", _window(sp, 3), digits=0)], unit="bp",
+                                   refs=[{"y": 0, "label": "IORB", "color": REF_RED},
+                                         {"y": -7, "label": "-7 bp (2023-25 norm)", "color": REF_GREY}])
+    else:
+        cards.append(_na_card("effr-iorb", "EFFR minus IORB · 联邦基金利率减 IORB (银行间)", ["EFFR", "IORB"], "Interbank overnight rate against IORB."))
+    # BGCR - IORB
+    bg = _get(S, "BGCR")
+    if bg is not None and io0 is not None:
+        sp = mon.spread(bg, io0, 100.0)
+        f = _fresh(bg, _spec("BGCR"), now)
+        v = float(sp.iloc[-1])
+        state = "elevated" if v >= fm.SOFR_REFERENCE_ELEVATED_BP else ("watch" if v >= fm.SOFR_STRATEGY_BP else "normal")
+        vol = _get(S, "BGCRVOL")
+        cards.append(_card(
+            "bgcr-iorb", "BGCR minus IORB · 广义一般担保回购减 IORB", ["BGCR", "IORB", "BGCRVOL"],
+            value=_fmt(v, "bp", 0, True), state=state,
+            sub="5d median {} · 20d {} · volume {}".format(_fmt(float(sp.tail(5).median()), "bp", 1, True),
+                                                         _fmt(mon.change_n(sp, 20), "bp", 0, True),
+                                                         _fmt(float(vol.iloc[-1]), "$B", 0) if vol is not None else "n/a"),
+            what="Broad general collateral repo rate (tri-party plus GCF, excluding bilateral) minus IORB, in basis points. Published by the NY Fed.",
+            asof=f.observation_date, cadence=_spec("BGCR").cadence, stale=f.stale,
+            why="Sits between TGCR (tri-party only) and SOFR (all repo). When SOFR rises but BGCR does not, the pressure is in bilateral dealer-cleared repo; when all three rise, cash for Treasury collateral is scarce across platforms.",
+            limits="Not calendar-filtered: month-end and Treasury settlement dates print higher. Context only, outside the funding resonance count.",
+            spark=mon.spark(sp, 20), rule="Watch at or above +3.0 bp, elevated at or above +5.0 bp (the SOFR strategy lines)."))
+        cards[-1]["_chart"] = dict(traces=[_tr("BGCR minus IORB", "STATE", _window(sp, 3), digits=0)], unit="bp",
+                                   refs=[{"y": 0, "label": "IORB", "color": REF_GREY}, {"y": 3, "label": "+3 bp", "color": REF_AMBER}])
+    else:
+        cards.append(_na_card("bgcr-iorb", "BGCR minus IORB · 广义一般担保回购减 IORB", ["BGCR", "IORB"], "Broad general collateral repo rate against IORB."))
+    # SOFR - EFFR: secured minus unsecured in one number
+    so = _get(S, "SOFR")
+    if so is not None and ef is not None:
+        sp = mon.spread(so, ef, 100.0)
+        f = _fresh(so, _spec("SOFR"), now)
+        pct, yrs = mon.level_pctile(sp, 3)
+        c = _card(
+            "sofr-effr", "SOFR minus EFFR · 担保减无担保", ["SOFR", "EFFR"],
+            value=_fmt(float(sp.iloc[-1]), "bp", 0, True), state="context",
+            sub="20d {} · 3y pctile {}".format(_fmt(mon.change_n(sp, 20), "bp", 0, True), _num(pct, 0)),
+            what="Secured overnight repo rate minus the unsecured fed funds rate, in basis points.",
+            asof=f.observation_date, cadence=_spec("SOFR").cadence, stale=f.stale,
+            why="Normally repo trades below fed funds because the lender holds Treasury collateral. A positive and widening gap means cash against collateral has become more expensive than unsecured bank lending, which isolates collateral and dealer balance-sheet pressure.",
+            limits="Different borrower mixes (dealers and funds in repo, FHLBs and banks in fed funds). Not calendar-filtered.",
+            spark=mon.spark(sp, 20))
+        c["_chart"] = dict(traces=[_tr("SOFR minus EFFR", "STATE", _window(sp, 3), digits=0)], unit="bp",
+                           refs=[{"y": 0, "label": "0", "color": REF_GREY}])
+        cards.append(c)
+    else:
+        cards.append(_na_card("sofr-effr", "SOFR minus EFFR · 担保减无担保", ["SOFR", "EFFR"], "Secured minus unsecured overnight rate."))
     # TGCR - IORB
     tg, io = _get(S, "TGCRRATE"), _get(S, "IORB")
     if tg is not None and io is not None:
@@ -221,8 +349,8 @@ def build_funding(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
         chart_vol = {"id": "chart-sofr-volume", "title": "SOFR transaction volume · SOFR 成交量",
                      "subtitle": "$ billions per day.", "unit": "$B", "traces": traces, "refs": [], "default_range": "6M"}
 
-    states = [c["state"] for c in cards if c["id"] in ("tgcr-iorb", "sofr-disp")]
-    return {"cards": cards, "backstops": backs, "backstops_in_use": n_use, "backstops_avail": n_avail,
+    states = [c["state"] for c in cards if c["id"] in ("tgcr-iorb", "sofr-disp", "effr-iorb", "bgcr-iorb")]
+    return {"cards": cards, "where": build_where(S, now), "backstops": backs, "backstops_in_use": n_use, "backstops_avail": n_avail,
             "dw_state": (dw_card or {}).get("backstop", "unavailable"),
             "charts": [c for c in (chart_disp, chart_vol) if c], "state": mon.worst(states),
             "iorb_ok": io is not None}
@@ -285,9 +413,42 @@ def build_fedbs(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
         f = _fresh(S[sid], spec, now)
         cards.append(_card(
             cid, title, [sid], value=_fmt(float(t.iloc[-1]), "$T", 2), state="context",
-            sub="4-week change {}".format(_fmt(mon.change_n(t, 4), "$T", 2, True)),
-            what="H.4.1 weekly Wednesday level, $ trillions. Reserves and the TGA are charted in the funding panel.",
+            sub="1w {} · 4w {}".format(_fmt(mon.change_n(t, 1) * 1000.0, "$B", 0, True), _fmt(mon.change_n(t, 4) * 1000.0, "$B", 0, True)),
+            what="H.4.1 weekly Wednesday level, shown in $ trillions; changes in $ billions.",
             asof=f.observation_date, cadence=spec.cadence, stale=f.stale, spark=mon.spark(t, 13)))
+    # Net liquidity decomposition (weekly, common Wednesdays)
+    nl = mon.net_liquidity_decomp(_get(S, "WALCL"), _get(S, "WTREGEN"), _get(S, "RRPONTSYD"))
+    netliq_chart = None
+    if len(nl) > 5:
+        w1, w4 = mon.window_contrib(nl, 1), mon.window_contrib(nl, 4)
+        end = nl.index[-1]
+        stale = (pd.Timestamp(now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now) - end).days > 13
+        drv = "1w drivers: Fed assets {}, TGA {}, ON RRP {}".format(_fmt(w1["d_assets"], "$B", 0, True), _fmt(w1["d_tga"], "$B", 0, True),
+                                                                   _fmt(w1["d_rrp"], "$B", 0, True))
+        c = _card(
+            "netliq", "Net liquidity (Fed assets - TGA - ON RRP) · 净流动性", ["WALCL", "WTREGEN", "RRPONTSYD"],
+            value=_fmt(float(nl["net"].iloc[-1]) / 1000.0, "$T", 2), state="context",
+            sub="1w {} · 4w {} · {}".format(_fmt(w1["d_net"], "$B", 0, True), _fmt(w4["d_net"], "$B", 0, True), drv),
+            what="Fed total assets minus the Treasury General Account minus overnight reverse repo, on common H.4.1 Wednesdays, in $ trillions. Weekly contributions: +change in Fed assets, -change in TGA, -change in ON RRP.",
+            asof=end.strftime("%Y-%m-%d"), cadence="weekly (Wednesday level, H.4.1)", stale=stale,
+            why="Shows which balance-sheet item moved cash in or out of the private system this week. A TGA build or a shrinking balance sheet drains reserves and money-fund cash; a falling ON RRP releases cash.",
+            limits="Window and end date matter: a 4-week change ending this Wednesday and one ending last Wednesday can differ in sign when a large weekly swing enters or leaves the window. Uses H.4.1 Wednesday TGA, which differs from the daily Treasury statement figure. Same definition as the LPI net-liquidity factor, shown here as a level and flow; it does not add a second LPI input.",
+            spark=[round(float(v) / 1000.0, 3) for v in nl["net"].tail(13)],
+            unit_note="WALCL and WTREGEN arrive in $ millions; ON RRP in $ billions. All converted to $ billions for the flows and $ trillions for the level.")
+        c["_chart"] = dict(traces=[_tr("Net liquidity", "STATE", _window(nl["net"] / 1000.0, 3), digits=3)], unit="$T", refs=[])
+        cards.insert(0, c)
+        nlp = nl[nl.index >= nl.index[-1] - pd.DateOffset(years=3)].dropna()
+        x = [d.strftime("%Y-%m-%d") for d in nlp.index]
+        netliq_chart = {"id": "chart-netliq-contrib", "title": "Weekly net-liquidity contributions · 净流动性周度贡献",
+                        "subtitle": "$ billions per week. Bars: +change in Fed assets, -change in TGA, -change in ON RRP. Line: net change. Week ending {}.".format(end.strftime("%Y-%m-%d")),
+                        "unit": "$B", "barmode": "relative", "default_range": "1Y", "initial_range": "1Y",
+                        "traces": [dict(name="Fed assets", color="#6366f1", type="bar", x=x, y=[round(float(v), 1) for v in nlp["d_assets"]]),
+                                   dict(name="TGA (inverted)", color="#f59e0b", type="bar", x=x, y=[round(float(v), 1) for v in nlp["d_tga"]]),
+                                   dict(name="ON RRP (inverted)", color="#38bdf8", type="bar", x=x, y=[round(float(v), 1) for v in nlp["d_rrp"]]),
+                                   dict(name="Net change", color="#e2e8f0", type="scatter", x=x, y=[round(float(v), 1) for v in nlp["d_net"]])],
+                        "refs": [{"y": 0, "label": "0", "color": "#475569"}]}
+    else:
+        cards.insert(0, _na_card("netliq", "Net liquidity (Fed assets - TGA - ON RRP) · 净流动性", ["WALCL", "WTREGEN", "RRPONTSYD"], "Fed assets minus TGA minus ON RRP."))
     charts: list[dict[str, Any]] = []
     if bills is not None:
         since_chart = "2024-10-01"
@@ -309,7 +470,7 @@ def build_fedbs(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
             traces.append(dict(name=name, color=color, type="scatter", stack=True, **mon.sample_series(comp[k], 1.0, 200, "2023-01-01", 0)))
         comp_chart = {"id": "chart-soma-comp", "title": "SOMA composition · SOMA 构成", "subtitle": "$ billions, stacked.",
                       "unit": "$B", "traces": traces, "refs": [], "default_range": "Max", "stacked": True}
-    return {"cards": cards, "charts": charts, "comp_chart": comp_chart, "rmp_avg": rmp_avg, "state": "context",
+    return {"cards": cards, "charts": charts, "comp_chart": comp_chart, "netliq_chart": netliq_chart, "rmp_avg": rmp_avg, "state": "context",
             "rmp_url": URL_RMP}
 
 
@@ -375,6 +536,25 @@ def build_credit(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
             rule="Reference lines at 5, 8 and 10 pp are operator references from the Weekly Crisis Tracker, not statistical thresholds."))
     else:
         cards.append(_na_card("ccc-bb", "CCC minus BB OAS · CCC 减 BB 质量利差", ["BAMLH0A3HYC", "BAMLH0A1HYBB"], "Rating-quality spread."))
+    hy, ig = _get(S, "BAMLH0A0HYM2"), _get(S, "BAMLC0A0CM")
+    if hy is not None and ig is not None:
+        q = mon.spread(hy, ig, 100.0)
+        f = _fresh(hy, _spec("BAMLH0A0HYM2"), now)
+        pct, yrs = mon.level_pctile(q, 3)
+        z = mon.change_z(q, 20, 3)
+        c = _card(
+            "hy-ig", "HY minus IG OAS · 高收益减投资级利差", ["BAMLH0A0HYM2", "BAMLC0A0CM"],
+            value=_fmt(float(q.iloc[-1]), "bp", 0), state=mon.credit_state(pct, z, yrs),
+            sub="20d {} · 5d change {} · pctile {} vs {}y".format(_fmt(mon.change_n(q, 20), "bp", 0, True), _fmt(mon.change_n(q, 5), "bp", 0, True), _num(pct, 0), yrs),
+            what="High-yield index OAS minus investment-grade index OAS, in basis points.",
+            asof=f.observation_date, cadence=_spec("BAMLH0A0HYM2").cadence, stale=f.stale,
+            why="Removes the part of spread moves shared by all corporate credit (rates volatility, broad risk appetite) and keeps the extra price of default risk. It widens when investors separate weak issuers from strong ones.",
+            limits="ICE BofA closes are published with a one-day lag, so a Friday selloff appears on the next business day.",
+            spark=mon.spark(q, 20), rule="Percentile of own 3y history plus 20-observation change z (same rule as the OAS ladder).")
+        c["_chart"] = dict(traces=[_tr("HY minus IG", "STATE", _window(q, 3), digits=0)], unit="bp", refs=_pct_refs(q, 3, "(3y)"))
+        cards.append(c)
+    else:
+        cards.append(_na_card("hy-ig", "HY minus IG OAS · 高收益减投资级利差", ["BAMLH0A0HYM2", "BAMLC0A0CM"], "High-yield minus investment-grade spread."))
     for sid, cid, title in (("NFCI", "nfci", "Chicago Fed NFCI · 芝加哥联储金融条件指数"),
                             ("ANFCI", "anfci", "Adjusted NFCI (ANFCI) · 调整后 NFCI"),
                             ("STLFSI4", "stlfsi", "St. Louis Fed Financial Stress Index · 圣路易斯联储金融压力指数")):
@@ -490,6 +670,48 @@ def build_rates(S: dict[str, pd.Series], now: datetime) -> dict[str, Any]:
                             limits="Level state uses percentiles since 2010, a period that includes the zero-rate years."))
     cards.append(_rate_card("DGS10", "dgs10", "10-year Treasury yield · 10年期国债收益率", S, now, state_on=True,
                             what="Constant-maturity 10-year Treasury yield.", why="Benchmark discount rate for mortgages and equity valuation."))
+    cards.append(_rate_card("DGS2", "dgs2", "2-year Treasury yield · 2年期国债收益率", S, now, state_on=False,
+                            what="Constant-maturity 2-year Treasury yield.",
+                            why="The 2-year prices the expected path of the policy rate over the next two years. A fall with stocks down points to growth fear; a rise points to inflation or hawkish repricing."))
+    rv10, rv2 = mon.realized_vol_bp(_get(S, "DGS10")), mon.realized_vol_bp(_get(S, "DGS2"))
+    if len(rv10) > 60:
+        f = _fresh(S["DGS10"], _spec("DGS10"), now)
+        pct10, yrs10 = mon.level_pctile(rv10, 5)
+        pct2, _ = mon.level_pctile(rv2, 5) if len(rv2) > 60 else (NAN, 0)
+        c = _card(
+            "rvol", "Treasury realized volatility (20d) · 国债已实现波动率", ["DGS10", "DGS2"],
+            value="10Y {}".format(_fmt(float(rv10.iloc[-1]), "bp", 0)), state="context",
+            sub="20d {} · 10Y pctile {} vs {}y · 2Y {} (pctile {})".format(
+                _fmt(mon.change_n(rv10, 20), "bp", 0, True), _num(pct10, 0), yrs10,
+                _fmt(float(rv2.iloc[-1]), "bp", 0) if len(rv2) else "n/a", _num(pct2, 0)),
+            what="Annualized standard deviation of daily yield changes over the last 20 trading days, in basis points per year: std(daily bp change) x sqrt(252).",
+            asof=f.observation_date, cadence=_spec("DGS10").cadence, stale=f.stale,
+            why="Bond volatility raises the haircut and VaR cost of holding Treasuries, which shrinks dealer and leveraged balance sheets. It is a realized cousin of the MOVE index, built from free FRED data.",
+            limits="Realized, so it lags implied volatility (MOVE). Constant-maturity yields are interpolated by Treasury.",
+            spark=mon.spark(rv10, 20))
+        c["_chart"] = dict(traces=[_tr("10Y", "STATE", _window(rv10, 3), digits=0), dict(_tr("2Y", "#2dd4bf", _window(rv2, 3), digits=0), nolabel=True)],
+                           unit="bp", refs=_pct_refs(rv10, 5, "10Y (5y)"))
+        cards.append(c)
+    else:
+        cards.append(_na_card("rvol", "Treasury realized volatility (20d) · 国债已实现波动率", ["DGS10", "DGS2"], "Realized volatility of daily yield changes."))
+    tb, sf = _get(S, "DTB3"), _get(S, "SOFR")
+    if tb is not None and sf is not None:
+        sp = mon.spread(tb, sf, 100.0)
+        f = _fresh(tb, _spec("DTB3"), now)
+        pct, yrs = mon.level_pctile(sp, 3)
+        c = _card(
+            "tbill-sofr", "3m T-bill minus SOFR · 3个月国库券减 SOFR", ["DTB3", "SOFR"],
+            value=_fmt(float(sp.iloc[-1]), "bp", 0, True), state="context",
+            sub="20d {} · 3y pctile {}".format(_fmt(mon.change_n(sp, 20), "bp", 0, True), _num(pct, 0)),
+            what="3-month Treasury bill yield (secondary market, discount basis) minus overnight SOFR, in basis points.",
+            asof=f.observation_date, cadence=_spec("DTB3").cadence, stale=f.stale,
+            why="Money funds choose between bills and repo. When heavy bill supply pushes bill yields above repo, cash moves out of repo and ON RRP into bills, which can lift repo rates. A positive gap is a supply signal for the front end.",
+            limits="A 3-month rate against an overnight rate: expected policy cuts within 3 months pull the gap down. DTB3 is quoted on a discount basis, a few bp below the bond-equivalent yield.",
+            spark=mon.spark(sp, 20))
+        c["_chart"] = dict(traces=[_tr("T-bill minus SOFR", "STATE", _window(sp, 3), digits=0)], unit="bp", refs=[{"y": 0, "label": "0", "color": REF_GREY}])
+        cards.append(c)
+    else:
+        cards.append(_na_card("tbill-sofr", "3m T-bill minus SOFR · 3个月国库券减 SOFR", ["DTB3", "SOFR"], "Bill yield against repo."))
     d30, d5 = _get(S, "DGS30"), _get(S, "DGS5")
     if d30 is not None and d5 is not None:
         sp = mon.spread(d30, d5, 100.0)
@@ -614,6 +836,12 @@ def _card_chart_spec(cid: str, S: dict[str, pd.Series], card: dict[str, Any]) ->
     st = card["state"]
     col = CARD_LINE.get(st, CARD_LINE["context"])
     d = lambda sid: _disp(S, sid)  # noqa: E731
+    if card.get("_chart"):
+        spec = dict(card["_chart"])
+        for t in spec["traces"]:
+            if t.get("color") == "STATE":
+                t["color"] = col
+        return spec
     if cid == "tgcr-iorb":
         tg, io = _get(S, "TGCRRATE"), _get(S, "IORB")
         if tg is None or io is None:
@@ -658,14 +886,14 @@ def _card_chart_spec(cid: str, S: dict[str, pd.Series], card: dict[str, Any]) ->
              "wtregen": "WTREGEN", "em-oas": "BAMLEMCBPIOAS", "nfci": "NFCI", "anfci": "ANFCI", "stlfsi": "STLFSI4",
              "oas-hy": "BAMLH0A0HYM2", "oas-ig": "BAMLC0A0CM", "oas-bbb": "BAMLC0A4CBBB", "oas-bb": "BAMLH0A1HYBB",
              "oas-b": "BAMLH0A2HYB", "oas-ccc": "BAMLH0A3HYC", "dgs30": "DGS30", "dgs10": "DGS10", "dfii10": "DFII10",
-             "tp10": "THREEFYTP10", "t10y2y": "T10Y2Y", "t10y3m": "T10Y3M", "t10yie": "T10YIE", "usd": "DTWEXBGS"}
+             "tp10": "THREEFYTP10", "t10y2y": "T10Y2Y", "t10y3m": "T10Y3M", "t10yie": "T10YIE", "usd": "DTWEXBGS", "dgs2": "DGS2"}
     if cid in LEVEL:
         sid = LEVEL[cid]
         ser = d(sid)
         if ser is None:
             return None
         spec = _spec(sid)
-        years = 5 if cid in ("dgs30", "dgs10", "dfii10", "tp10", "t10y2y", "t10y3m", "t10yie", "usd") else 3
+        years = 5 if cid in ("dgs2", "dgs30", "dgs10", "dfii10", "tp10", "t10y2y", "t10y3m", "t10yie", "usd") else 3
         refs: list[dict[str, Any]] = []
         vl = None
         if cid.startswith("oas-"):
@@ -724,8 +952,10 @@ def _add_change_window(c: dict[str, Any], chart: dict[str, Any]) -> None:
         return
     key, val = m.group(1), m.group(2).strip()
     sign = val[:1]
-    c["chg_txt"] = "{} {} {}".format("▲" if sign == "+" else "▼", _CHG_LBL[key], val)
-    c["chg_dir"] = "up" if sign == "+" else "down"
+    num = re.sub(r"[^0-9.]", "", val)
+    flat = bool(num) and float(num or 0) == 0.0
+    c["chg_txt"] = "{} {} {}".format("▲" if sign == "+" else "▼", _CHG_LBL[key], val) if not flat else "{} {}".format(_CHG_LBL[key], val.lstrip("+-−"))
+    c["chg_dir"] = "flat" if flat else ("up" if sign == "+" else "down")
     c["chg_color"] = CARD_LINE.get(c["state"], CARD_LINE["context"])
     x = chart["traces"][0]["x"]
     n = _CHG_OBS[key]

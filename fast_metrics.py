@@ -663,6 +663,76 @@ def ai_breadth_and_rs(price_df: pd.DataFrame, now: datetime | None = None) -> di
             "rs": rs, "observation_date": latest.strftime("%Y-%m-%d"), "freshness": f.__dict__}
 
 
+BREADTH_PAIRS = ("RSP", "IWM", "QQQ")       # each against SPY
+TAPE_TICKERS = ("SPY", "RSP", "IWM", "QQQ", "GLD", "USO")
+
+
+def _pct_change(s: pd.Series, n: int) -> float:
+    s = s.dropna()
+    if len(s) <= n or not s.iloc[-n - 1]:
+        return float("nan")
+    return float(s.iloc[-1] / s.iloc[-n - 1] - 1.0) * 100.0
+
+
+def _rank_pct(s: pd.Series, years: float = 3.0) -> float:
+    s = s.dropna()
+    if len(s) < 60:
+        return float("nan")
+    w = s[s.index >= s.index[-1] - pd.DateOffset(years=int(years))]
+    return float((w <= w.iloc[-1]).mean() * 100.0)
+
+
+def market_tape(close: pd.DataFrame, volume: pd.DataFrame | None = None,
+                now: datetime | None = None) -> dict[str, Any]:
+    """Breadth ratios (RSP, IWM, QQQ against SPY), SPY volume against its prior 20-day
+    average, and GLD / USO returns. Adjusted closes; percent changes are simple returns.
+
+    Descriptive only: nothing here enters the LPI, a composite or the de-lever tally (D6).
+    """
+    close = close.copy().dropna(how="all")
+    if close.empty or "SPY" not in close or close["SPY"].dropna().empty:
+        return {"available": False}
+    latest = close["SPY"].dropna().index[-1]
+    f = freshness(latest, "daily business day", 4, now)
+    out: dict[str, Any] = {"available": True, "observation_date": latest.strftime("%Y-%m-%d"),
+                           "freshness": f.__dict__, "ratios": {}, "assets": {}}
+    for t in BREADTH_PAIRS:
+        if t not in close:
+            continue
+        r = (close[t] / close["SPY"]).dropna()
+        if len(r) < 60:
+            continue
+        chg20 = r.pct_change(20, fill_method=None) * 100.0
+        tail = r.tail(504)
+        out["ratios"][t] = {
+            "current": float(r.iloc[-1]), "chg5": _pct_change(r, 5), "chg20": _pct_change(r, 20),
+            "chg20_pctile": _rank_pct(chg20, 3), "ma50": float(r.rolling(50).mean().iloc[-1]),
+            "dates": [d.strftime("%Y-%m-%d") for d in tail.index],
+            "history": [round(float(v), 5) for v in tail.values]}
+    for t in ("SPY", "RSP", "IWM", "QQQ", "GLD", "USO"):
+        if t not in close or close[t].dropna().empty:
+            continue
+        c = close[t].dropna()
+        tail = c.tail(504)
+        out["assets"][t] = {"last": float(c.iloc[-1]), "ret1": _pct_change(c, 1), "ret5": _pct_change(c, 5),
+                            "ret20": _pct_change(c, 20), "obs": c.index[-1].strftime("%Y-%m-%d"),
+                            "dates": [d.strftime("%Y-%m-%d") for d in tail.index],
+                            "history": [round(float(v), 2) for v in tail.values]}
+    if volume is not None and "SPY" in volume:
+        v = volume["SPY"].dropna()
+        v = v[v > 0]
+        if len(v) > 40:
+            avg = v.rolling(20).mean().shift(1)          # prior 20 sessions, today excluded
+            ratio = (v / avg).dropna()
+            tail = ratio.tail(504)
+            out["spy_volume"] = {"shares": float(v.iloc[-1]), "avg20": float(avg.iloc[-1]),
+                                 "ratio": float(ratio.iloc[-1]), "pctile": _rank_pct(ratio, 2),
+                                 "obs": v.index[-1].strftime("%Y-%m-%d"),
+                                 "dates": [d.strftime("%Y-%m-%d") for d in tail.index],
+                                 "history": [round(float(x), 3) for x in tail.values]}
+    return out
+
+
 def oas_metrics(series: dict[str, pd.Series], now: datetime | None = None) -> dict[str, Any]:
     labels = {"HY": "BAMLH0A0HYM2", "IG": "BAMLC0A0CM", "BBB": "BAMLC0A4CBBB"}
     result: dict[str, Any] = {}
@@ -1575,4 +1645,13 @@ def fetch_fast_metrics(snapshot_path: str | Path, now: datetime | None = None) -
     except Exception as exc:
         out["ai"] = {"available": False, "freshness": freshness(None, "daily business day", 4, current).__dict__}
         out["errors"]["ai"] = str(exc)
+
+    # Market tape: breadth ratios, SPY volume and cross-asset context (descriptive only).
+    try:
+        import yfinance as yf
+        raw = yf.download(list(TAPE_TICKERS), period="3y", auto_adjust=True, progress=False, threads=True)
+        out["tape"] = market_tape(raw["Close"], raw.get("Volume"), current)
+    except Exception as exc:
+        out["tape"] = {"available": False, "freshness": freshness(None, "daily business day", 4, current).__dict__}
+        out["errors"]["tape"] = str(exc)
     return out

@@ -42,9 +42,15 @@ def fetch_catalog(specs: Iterable[fc.FredSpec] | None = None, *, max_workers: in
     'FRED cached official CSV'. Each series is also registered in the health registry.
     """
     current = now or fm.utc_now()
-    chosen = list(specs if specs is not None else fc.CATALOG)
+    every = list(specs if specs is not None else fc.CATALOG)
+    chosen = [s for s in every if s.source == "fred"]
     out: dict[str, pd.Series] = {}
     errors: dict[str, str] = {}
+    ny = [s for s in every if s.source == "nyfed"]
+    if ny:
+        got, errs = fetch_nyfed(ny, now=current)
+        out.update(got)
+        errors.update(errs)
 
     def one(spec: fc.FredSpec):
         try:
@@ -69,6 +75,85 @@ def fetch_catalog(specs: Iterable[fc.FredSpec] | None = None, *, max_workers: in
                 status = "cached"
             health.register("FRED " + spec.id, "FRED fredgraph.csv", f.observation_date, spec.cadence,
                             status, current.strftime("%Y-%m-%d %H:%M UTC"), s.attrs.get("source", ""))
+    return out, errors
+
+
+NYFED_SECURED_URL = "https://markets.newyorkfed.org/api/rates/secured/{rate}/search.json?startDate={start}&endDate={end}"
+NYFED_CACHE_FMT = "NYFED_{id}.csv"
+
+
+def parse_nyfed_secured(payload: dict[str, Any]) -> tuple[pd.Series, pd.Series]:
+    """(rate in percent, volume in $ billions) from a NY Fed secured reference-rate payload."""
+    rows = payload.get("refRates") or []
+    rate, vol = {}, {}
+    for r in rows:
+        d = pd.to_datetime(r.get("effectiveDate"), errors="coerce")
+        if d is pd.NaT or d != d:
+            continue
+        try:
+            rate[d] = float(r["percentRate"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        try:
+            vol[d] = float(r["volumeInBillions"])
+        except (KeyError, TypeError, ValueError):
+            pass
+    return pd.Series(rate, dtype=float).sort_index(), pd.Series(vol, dtype=float).sort_index()
+
+
+def _series_csv(s: pd.Series, name: str) -> str:
+    return "observation_date," + name + "\n" + "".join("{},{}\n".format(d.strftime("%Y-%m-%d"), repr(float(v)) if v != int(v) else int(v))
+                                                       for d, v in s.dropna().items())
+
+
+def fetch_nyfed(specs: Iterable[fc.FredSpec], *, now: datetime | None = None) -> tuple[dict[str, pd.Series], dict[str, str]]:
+    """BGCR rate and volume from the NY Fed Markets API, with a merge-only CSV cache in
+    data/fred-cache (NYFED_<id>.csv). The cache never shrinks and is never forward-filled."""
+    import os
+    current = now or fm.utc_now()
+    specs = list(specs)
+    out: dict[str, pd.Series] = {}
+    errors: dict[str, str] = {}
+    live: dict[str, pd.Series] = {}
+    err = ""
+    try:
+        if os.environ.get("MFD_FORCE_FRED_CACHE") == "1":
+            raise RuntimeError("MFD_FORCE_FRED_CACHE=1: live NY Fed request skipped (degraded-source test)")
+        start = min(s.start for s in specs)
+        url = NYFED_SECURED_URL.format(rate="bgcr", start=start, end=current.strftime("%Y-%m-%d"))
+        rate, vol = parse_nyfed_secured(fm._get(url, timeout=40, retries=2).json())
+        if rate.empty:
+            raise ValueError("NY Fed BGCR returned no observations")
+        live = {"BGCR": rate, "BGCRVOL": vol}
+    except Exception as exc:  # noqa: BLE001
+        err = str(exc)[:200]
+    for spec in specs:
+        cache = fm.FRED_CACHE_DIR / NYFED_CACHE_FMT.format(id=spec.id)
+        s = live.get(spec.id)
+        try:
+            if s is not None and not s.empty:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                old = cache.read_text(encoding="utf-8") if cache.exists() else ""
+                cache.write_text(fm.merge_fred_csv(old, _series_csv(s, spec.id)), encoding="utf-8")
+                s = fm._parse_fred_csv(cache.read_text(encoding="utf-8"), spec.id)
+                s = s[s.index >= pd.Timestamp(spec.start)]
+                s.attrs["source"] = "NY Fed live"
+            elif cache.exists():
+                s = fm._parse_fred_csv(cache.read_text(encoding="utf-8"), spec.id)
+                s = s[s.index >= pd.Timestamp(spec.start)]
+                s.attrs["source"] = "NY Fed cached official CSV"
+            else:
+                raise RuntimeError(err or "no data")
+        except Exception as exc:  # noqa: BLE001
+            errors[spec.id] = str(exc)[:200]
+            health.register("NY Fed " + spec.id, "NY Fed reference rates API", None, spec.cadence, "failed",
+                            current.strftime("%Y-%m-%d %H:%M UTC"), errors[spec.id])
+            continue
+        out[spec.id] = s
+        f = freshness_of(s, spec, current)
+        status = "stale" if f.stale else ("current" if s.attrs["source"] == "NY Fed live" else "cached")
+        health.register("NY Fed " + spec.id, "NY Fed reference rates API", f.observation_date, spec.cadence,
+                        status, current.strftime("%Y-%m-%d %H:%M UTC"), s.attrs["source"])
     return out, errors
 
 
@@ -182,6 +267,104 @@ def pct_state(level_pct: float, chg_z: float, hist_years: float, *, min_years: f
 
 
 credit_state = pct_state
+
+
+# Secured vs unsecured funding diagnostic (descriptive, D6).
+SECURED_ON_BP = 3.0        # SOFR - IORB 5-observation median at or above the +3 bp strategy line
+UNSEC_LEVEL_WATCH_BP = -1.0
+UNSEC_LEVEL_ON_BP = 0.0    # EFFR at or above IORB: banks pay more for reserves than the Fed pays on them
+UNSEC_RISE_BP = 2.0        # EFFR - IORB up 2 bp or more over 20 observations
+
+
+def unsecured_state(level_bp: float, chg20_bp: float) -> str:
+    """EFFR - IORB state. Uses the IORB anchor and the 20-observation change instead of a
+    percentile: the spread stepped from about -7 bp to about -2 bp in Sep-Nov 2025, so a
+    3-year percentile would sit near 100 for a year without saying anything new."""
+    if level_bp != level_bp:
+        return "na"
+    if level_bp >= UNSEC_LEVEL_ON_BP:
+        return "elevated"
+    if level_bp >= UNSEC_LEVEL_WATCH_BP or (chg20_bp == chg20_bp and chg20_bp >= UNSEC_RISE_BP):
+        return "watch"
+    return "normal"
+
+
+LOCUS = {
+    "broad": ("elevated", "Broad: repo and interbank both tight", "全面偏紧:回购与银行间同时承压",
+              "Secured repo trades above IORB and EFFR is at or rising toward IORB. This is the pattern of scarce reserves."),
+    "secured": ("watch", "Secured repo pressure; interbank calm", "担保回购承压,银行间平稳",
+                "Repo rates trade above IORB while EFFR stays below IORB and is not rising. The pressure sits in collateral and dealer balance sheets (Treasury settlement, TGA build), not in bank reserves."),
+    "unsecured": ("watch", "Interbank pressure without repo pressure", "银行间承压,回购未承压",
+                  "EFFR is at or rising toward IORB while repo is calm. This is unusual; check bank-specific funding and FHLB activity."),
+    "calm": ("normal", "Calm: neither market above its anchor", "平稳:两个市场都未高于锚",
+             "Repo is below the +3 bp line and EFFR is below IORB without a rise."),
+}
+
+
+def funding_locus(secured_med_bp: float, unsec_bp: float, unsec_chg20_bp: float) -> str:
+    """Classify where overnight funding pressure sits: broad / secured / unsecured / calm / na."""
+    if secured_med_bp != secured_med_bp or unsec_bp != unsec_bp:
+        return "na"
+    sec_on = secured_med_bp >= SECURED_ON_BP
+    unsec_on = unsec_bp >= UNSEC_LEVEL_ON_BP or (unsec_chg20_bp == unsec_chg20_bp and unsec_chg20_bp >= UNSEC_RISE_BP)
+    if sec_on and unsec_on:
+        return "broad"
+    if sec_on:
+        return "secured"
+    if unsec_on:
+        return "unsecured"
+    return "calm"
+
+
+def net_liquidity_decomp(walcl_m: pd.Series | None, tga_m: pd.Series | None, rrp_b: pd.Series | None,
+                         *, rrp_lookback_days: int = 3) -> pd.DataFrame:
+    """Weekly net liquidity (Fed assets - TGA - ON RRP) in $ billions on common Wednesdays.
+
+    WALCL and WTREGEN are H.4.1 Wednesday levels ($ millions). ON RRP is daily ($ billions);
+    the Wednesday value is used, or the latest print within rrp_lookback_days before it when
+    Wednesday is a holiday. Rows end at the last Wednesday where all three exist (no forward
+    fill past a series' last print). Columns: assets, tga, rrp, net, and the weekly
+    contributions d_assets (= +dWALCL), d_tga (= -dTGA), d_rrp (= -dRRP), d_net.
+    """
+    cols = ["assets", "tga", "rrp", "net", "d_assets", "d_tga", "d_rrp", "d_net"]
+    if walcl_m is None or tga_m is None or rrp_b is None:
+        return pd.DataFrame(columns=cols)
+    a = walcl_m.dropna() / 1000.0
+    t = tga_m.dropna() / 1000.0
+    r = rrp_b.dropna().sort_index()
+    if a.empty or t.empty or r.empty:
+        return pd.DataFrame(columns=cols)
+    idx = a.index.intersection(t.index)
+    idx = idx[idx <= r.index[-1]]
+    rr = {}
+    for d in idx:
+        w = r[(r.index <= d) & (r.index >= d - pd.Timedelta(days=rrp_lookback_days))]
+        if len(w):
+            rr[d] = float(w.iloc[-1])
+    df = pd.DataFrame({"assets": a.reindex(idx), "tga": t.reindex(idx), "rrp": pd.Series(rr)}).dropna()
+    df["net"] = df["assets"] - df["tga"] - df["rrp"]
+    df["d_assets"] = df["assets"].diff()
+    df["d_tga"] = -df["tga"].diff()
+    df["d_rrp"] = -df["rrp"].diff()
+    df["d_net"] = df["net"].diff()
+    return df[cols]
+
+
+def window_contrib(df: pd.DataFrame, weeks: int) -> dict[str, float]:
+    """Sum of weekly contributions over the last `weeks` rows ($ billions)."""
+    if df is None or len(df) <= weeks:
+        return {k: NAN for k in ("d_assets", "d_tga", "d_rrp", "d_net")}
+    end, start = df.iloc[-1], df.iloc[-1 - weeks]
+    return {"d_assets": float(end.assets - start.assets), "d_tga": float(-(end.tga - start.tga)),
+            "d_rrp": float(-(end.rrp - start.rrp)), "d_net": float(end.net - start.net)}
+
+
+def realized_vol_bp(yield_pct: pd.Series | None, window: int = 20) -> pd.Series:
+    """Annualized realized volatility of daily yield changes, in bp: std(daily bp change) x sqrt(252)."""
+    if yield_pct is None:
+        return pd.Series(dtype=float)
+    d = yield_pct.dropna().diff() * 100.0
+    return (d.rolling(window).std() * np.sqrt(252.0)).dropna()
 
 
 def rates_state(level_pct: float, chg_z: float, hist_years: float) -> tuple[str, str]:

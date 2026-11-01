@@ -28,10 +28,12 @@ class FredSpec:
     max_age_days: int       # older than this is stale (grey, no status)
     start: str              # observation_start used for the fetch
     role: str = "context"   # state = drives a descriptive state label; context = plotted only
+    source: str = "fred"    # fred = fredgraph.csv; nyfed = NY Fed Markets reference-rates API
+    src_url: str = ""       # public page for non-FRED series
 
     @property
     def url(self) -> str:
-        return FRED_SERIES_URL.format(id=self.id)
+        return self.src_url or FRED_SERIES_URL.format(id=self.id)
 
 
 DAILY = "daily business day"
@@ -49,6 +51,15 @@ CATALOG: tuple[FredSpec, ...] = (
     _s("SOFR", "SOFR", "SOFR", "funding", "percent", "pct", 1.0, DAILY, 5, "2023-01-01"),
     _s("IORB", "IORB", "准备金利率 IORB", "funding", "percent", "pct", 1.0, DAILY, 10, "2023-01-01"),
     _s("TGCRRATE", "Tri-party general collateral rate", "三方回购利率 TGCR", "funding", "percent", "pct", 1.0, DAILY, 5, "2023-01-01", "state"),
+    _s("EFFR", "Effective federal funds rate", "联邦基金有效利率 EFFR", "funding", "percent", "pct", 1.0, DAILY, 5, "2023-01-01", "state"),
+    _s("OBFR", "Overnight bank funding rate", "隔夜银行融资利率 OBFR", "funding", "percent", "pct", 1.0, DAILY, 5, "2023-01-01"),
+    _s("EFFRVOL", "Effective federal funds volume", "联邦基金成交量", "funding", "billions", "$B", 1.0, DAILY, 5, "2023-01-01"),
+    _s("OBFRVOL", "Overnight bank funding volume", "隔夜银行融资成交量", "funding", "billions", "$B", 1.0, DAILY, 5, "2023-01-01"),
+    _s("TGCRVOLUME", "Tri-party general collateral rate volume", "三方回购成交量", "funding", "billions", "$B", 1.0, DAILY, 5, "2023-01-01"),
+    _s("BGCR", "Broad general collateral rate (NY Fed)", "广义一般担保回购利率 BGCR", "funding", "percent", "pct", 1.0, DAILY, 5, "2023-01-01",
+       source="nyfed", src_url="https://www.newyorkfed.org/markets/reference-rates/bgcr"),
+    _s("BGCRVOL", "Broad general collateral rate volume (NY Fed)", "BGCR 成交量", "funding", "billions", "$B", 1.0, DAILY, 5, "2023-01-01",
+       source="nyfed", src_url="https://www.newyorkfed.org/markets/reference-rates/bgcr"),
     _s("SOFR1", "SOFR 1st percentile", "SOFR 第1分位", "funding", "percent", "pct", 1.0, DAILY, 5, "2023-01-01"),
     _s("SOFR25", "SOFR 25th percentile", "SOFR 第25分位", "funding", "percent", "pct", 1.0, DAILY, 5, "2023-01-01"),
     _s("SOFR75", "SOFR 75th percentile", "SOFR 第75分位", "funding", "percent", "pct", 1.0, DAILY, 5, "2023-01-01"),
@@ -66,6 +77,7 @@ CATALOG: tuple[FredSpec, ...] = (
     _s("WSHONBNL", "SOMA Treasury notes and bonds (nominal)", "SOMA 中长期国债", "fedbs", "millions", "$B", 0.001, WEEKLY_H41, 12, "2023-01-01"),
     _s("WSHOMCB", "SOMA mortgage-backed securities", "SOMA MBS", "fedbs", "millions", "$B", 0.001, WEEKLY_H41, 12, "2023-01-01"),
     _s("WSEFINTL1", "Securities held in custody for foreign official accounts", "外国官方托管证券", "fedbs", "millions", "$T", 1e-6, WEEKLY_H41, 12, "2023-01-01"),
+    _s("RRPONTSYD", "Overnight reverse repo (ON RRP) take-up", "隔夜逆回购 ON RRP", "fedbs", "billions", "$B", 1.0, DAILY, 5, "2023-01-01"),
     _s("WALCL", "Fed total assets", "美联储总资产", "fedbs", "millions", "$T", 1e-6, WEEKLY_H41, 12, "2023-01-01"),
     _s("WRESBAL", "Reserve balances at Federal Reserve Banks", "准备金余额", "fedbs", "millions", "$T", 1e-6, WEEKLY_H41, 12, "2023-01-01"),
     _s("WTREGEN", "Treasury General Account", "财政部 TGA", "fedbs", "millions", "$T", 1e-6, WEEKLY_H41, 12, "2023-01-01"),

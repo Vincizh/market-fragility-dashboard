@@ -27,7 +27,11 @@ class CatalogTests(unittest.TestCase):
             self.assertIn(s.role, ("state", "context"))
             self.assertGreater(s.scale, 0)
             self.assertGreater(s.max_age_days, 0)
-            self.assertTrue(s.url.endswith(s.id))
+            self.assertIn(s.source, ("fred", "nyfed"))
+            if s.source == "fred":
+                self.assertTrue(s.url.endswith(s.id))
+            else:
+                self.assertTrue(s.url.startswith("https://www.newyorkfed.org/"))
             self.assertTrue(s.label_en and s.label_zh and s.cadence)
 
     def test_units_documented_in_catalog(self):
@@ -211,3 +215,142 @@ class HealthTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FundingLocusTests(unittest.TestCase):
+    def test_locus_classes(self):
+        self.assertEqual(mon.funding_locus(4, -2, 0), "secured")
+        self.assertEqual(mon.funding_locus(4, 0, 0), "broad")
+        self.assertEqual(mon.funding_locus(4, -3, 2), "broad")
+        self.assertEqual(mon.funding_locus(1, 0.5, 0), "unsecured")
+        self.assertEqual(mon.funding_locus(1, -2, 0), "calm")
+        self.assertEqual(mon.funding_locus(float("nan"), -2, 0), "na")
+        self.assertEqual(mon.funding_locus(4, float("nan"), 0), "na")
+        self.assertEqual(mon.funding_locus(1, -2, float("nan")), "calm")
+        for k in ("broad", "secured", "unsecured", "calm"):
+            self.assertIn(k, mon.LOCUS)
+
+    def test_unsecured_state(self):
+        self.assertEqual(mon.unsecured_state(-7, 0), "normal")
+        self.assertEqual(mon.unsecured_state(-2, 0), "normal")
+        self.assertEqual(mon.unsecured_state(-1, 0), "watch")
+        self.assertEqual(mon.unsecured_state(-5, 2), "watch")
+        self.assertEqual(mon.unsecured_state(0, -1), "elevated")
+        self.assertEqual(mon.unsecured_state(float("nan"), 0), "na")
+
+
+class NetLiquidityTests(unittest.TestCase):
+    def setUp(self):
+        weds = pd.date_range("2026-09-02", periods=5, freq="W-WED")
+        self.weds = weds
+        self.walcl = pd.Series([6_600_000, 6_610_000, 6_605_000, 6_600_000, 6_592_000], index=weds, dtype=float)  # $M
+        self.tga = pd.Series([800_000, 850_000, 900_000, 950_000, 998_000], index=weds, dtype=float)               # $M
+        days = pd.bdate_range("2026-09-01", "2026-09-30")
+        self.rrp = pd.Series(10.0, index=days)                                                                      # $B
+
+    def test_levels_and_contributions(self):
+        df = mon.net_liquidity_decomp(self.walcl, self.tga, self.rrp)
+        self.assertEqual(list(df.index), list(self.weds))
+        self.assertAlmostEqual(df["net"].iloc[0], 6600 - 800 - 10)
+        last = df.iloc[-1]
+        self.assertAlmostEqual(last.d_assets, -8.0)
+        self.assertAlmostEqual(last.d_tga, -48.0)
+        self.assertAlmostEqual(last.d_rrp, 0.0)
+        self.assertAlmostEqual(last.d_net, last.d_assets + last.d_tga + last.d_rrp)
+
+    def test_no_forward_fill_past_last_rrp(self):
+        rrp = self.rrp[self.rrp.index <= "2026-09-20"]
+        df = mon.net_liquidity_decomp(self.walcl, self.tga, rrp)
+        self.assertEqual(df.index[-1], pd.Timestamp("2026-09-16"))
+
+    def test_rrp_holiday_lookback(self):
+        rrp = self.rrp.drop(pd.Timestamp("2026-09-16"))
+        df = mon.net_liquidity_decomp(self.walcl, self.tga, rrp)
+        self.assertIn(pd.Timestamp("2026-09-16"), df.index)
+        df0 = mon.net_liquidity_decomp(self.walcl, self.tga, rrp, rrp_lookback_days=0)
+        self.assertNotIn(pd.Timestamp("2026-09-16"), df0.index)
+
+    def test_common_wednesdays_only(self):
+        tga = self.tga.drop(self.weds[2])
+        df = mon.net_liquidity_decomp(self.walcl, tga, self.rrp)
+        self.assertNotIn(self.weds[2], df.index)
+
+    def test_window_contrib(self):
+        df = mon.net_liquidity_decomp(self.walcl, self.tga, self.rrp)
+        w = mon.window_contrib(df, 4)
+        self.assertAlmostEqual(w["d_assets"], -8.0)
+        self.assertAlmostEqual(w["d_tga"], -198.0)
+        self.assertAlmostEqual(w["d_net"], w["d_assets"] + w["d_tga"] + w["d_rrp"])
+        self.assertTrue(np.isnan(mon.window_contrib(df, 5)["d_net"]))
+
+    def test_missing_input(self):
+        self.assertTrue(mon.net_liquidity_decomp(None, self.tga, self.rrp).empty)
+
+
+class RealizedVolTests(unittest.TestCase):
+    def test_constant_step(self):
+        y = daily([4.0 + 0.01 * (i % 2) for i in range(40)])
+        rv = mon.realized_vol_bp(y, 20)
+        # daily changes alternate +1/-1 bp: sample std over 20 = sqrt(20/19)
+        self.assertAlmostEqual(rv.iloc[-1], np.sqrt(20 / 19) * np.sqrt(252), places=6)
+        self.assertEqual(len(mon.realized_vol_bp(None)), 0)
+
+
+class NyFedTests(unittest.TestCase):
+    PAYLOAD = {"refRates": [
+        {"effectiveDate": "2026-10-29", "type": "BGCR", "percentRate": 3.92, "volumeInBillions": 1242},
+        {"effectiveDate": "2026-10-28", "type": "BGCR", "percentRate": 3.91, "volumeInBillions": 1200},
+        {"effectiveDate": "bad", "percentRate": 1},
+        {"effectiveDate": "2026-10-27", "percentRate": "x", "volumeInBillions": 1100}]}
+
+    def test_parse(self):
+        rate, vol = mon.parse_nyfed_secured(self.PAYLOAD)
+        self.assertEqual(list(rate.index), [pd.Timestamp("2026-10-28"), pd.Timestamp("2026-10-29")])
+        self.assertAlmostEqual(rate.iloc[-1], 3.92)
+        self.assertEqual(len(vol), 3)
+        self.assertEqual(mon.parse_nyfed_secured({})[0].size, 0)
+
+    def test_cache_merge_only(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        import fast_metrics as fmx
+        specs = [s for s in fc.CATALOG if s.source == "nyfed"]
+        self.assertEqual({s.id for s in specs}, {"BGCR", "BGCRVOL"})
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "NYFED_BGCR.csv"
+            cache.write_text("observation_date,BGCR\n2020-01-02,1.5\n2026-10-28,3.91\n", encoding="utf-8")
+
+            class R:
+                def json(self_inner):
+                    return NyFedTests.PAYLOAD
+            with mock.patch.object(fmx, "FRED_CACHE_DIR", Path(tmp)), \
+                    mock.patch.object(fmx, "_get", return_value=R()), \
+                    mock.patch.dict(os.environ, {"MFD_FORCE_FRED_CACHE": "0"}):
+                out, errs = mon.fetch_nyfed(specs, now=datetime(2026, 10, 30, 12, tzinfo=timezone.utc))
+            text = cache.read_text(encoding="utf-8")
+            self.assertIn("2020-01-02", text)          # old rows kept
+            self.assertIn("2026-10-29", text)          # new rows merged
+            self.assertEqual(errs, {})
+            self.assertAlmostEqual(out["BGCR"].iloc[-1], 3.92)
+            # live failure falls back to the cache, without forward fill
+            with mock.patch.object(fmx, "FRED_CACHE_DIR", Path(tmp)), \
+                    mock.patch.dict(os.environ, {"MFD_FORCE_FRED_CACHE": "1"}):
+                out2, errs2 = mon.fetch_nyfed(specs, now=datetime(2026, 11, 20, 12, tzinfo=timezone.utc))
+            self.assertEqual(out2["BGCR"].index[-1], pd.Timestamp("2026-10-29"))
+            self.assertEqual(out2["BGCR"].attrs["source"], "NY Fed cached official CSV")
+            self.assertEqual(cache.read_text(encoding="utf-8"), text)
+
+
+class ChangeWindowTests(unittest.TestCase):
+    def test_flat_change_has_no_arrow(self):
+        c = {"sub": "20d +0 bp · 3y pctile 85", "state": "normal"}
+        chart = {"traces": [{"x": ["2026-01-%02d" % i for i in range(1, 30)]}]}
+        md._add_change_window(c, chart)
+        self.assertEqual(c["chg_dir"], "flat")
+        self.assertNotIn("▲", c["chg_txt"])
+        self.assertNotIn("▼", c["chg_txt"])
+        c2 = {"sub": "20d -27 bp", "state": "context"}
+        md._add_change_window(c2, chart)
+        self.assertTrue(c2["chg_txt"].startswith("▼"))
