@@ -1,0 +1,18 @@
+{
+ "v": 1,
+ "current": {
+  "when": "2026-11-01T12:27Z",
+  "level": "elevated",
+  "stages": {
+   "backdrop": "confirmed",
+   "repo": "partial",
+   "reserves": "partial",
+   "transmission": "partial",
+   "amplification": "confirmed"
+  },
+  "fsi": 61.9,
+  "fsi_state": "watch"
+ },
+ "events": [],
+ "started": "2026-11-01T12:27Z"
+}
