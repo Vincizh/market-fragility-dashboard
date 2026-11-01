@@ -1987,6 +1987,12 @@ def _effr_aligned(dates):
 
 
 _where = fred_mod["funding"].get("where") or {}
+if fp_count >= 2 and _where.get("key") == "secured":
+    fp_interp += (" Cross-check: EFFR is still below IORB ({:+.0f} bp) and not rising, so banks are not yet bidding up "
+                  "reserves. The repo leg reflects collateral and dealer balance-sheet pressure; the reserve and TGA legs "
+                  "show the direction of travel, not scarcity yet.").format(_where.get("unsec_bp", float("nan")))
+elif fp_count >= 1 and _where.get("key") == "broad":
+    fp_interp += " Cross-check: EFFR is at or rising toward IORB as well, which is the pattern of scarce reserves."
 # --- Market tape (descriptive; outside the LPI, every composite and the de-lever tally, D6) ---
 tape = fast.get("tape", {}) or {}
 _tape_m = {"available": tape.get("available"), "freshness": tape.get("freshness", {}), "observation_date": tape.get("observation_date")}
