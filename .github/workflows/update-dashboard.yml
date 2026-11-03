@@ -2,20 +2,72 @@ name: Generate Dashboard
 
 on:
   schedule:
-    # Runs every hour at :05 past the hour (UTC)
-    - cron: '5 * * * *'
-  workflow_dispatch:  # Allow manual trigger from GitHub Actions UI
+    # GitHub drops many scheduled runs under load (late October 2026: about 6 of 24 hourly
+    # runs fired per day), so three off-peak cron lines give each hour three chances.
+    # refresh_guard.py skips a scheduled run if the page was generated less than 25 minutes ago.
+    - cron: '7 * * * *'
+    - cron: '27 * * * *'
+    - cron: '47 * * * *'
+  workflow_dispatch:
+    inputs:
+      attempt:
+        description: 'Retry attempt (0 = normal run). Set by the workflow itself.'
+        required: false
+        default: '0'
+      retry_for:
+        description: 'Sources to retry, separated by |. Set by the workflow itself.'
+        required: false
+        default: ''
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
+    outputs:
+      skip: ${{ steps.guard.outputs.skip }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            data/health.json
+            refresh_guard.py
+          sparse-checkout-cone-mode: false
+
+      - name: Wait before a retry attempt
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.attempt != '0' && inputs.attempt != '' }}
+        env:
+          ATTEMPT: ${{ inputs.attempt }}
+          RETRY_FOR: ${{ inputs.retry_for }}
+        run: |
+          secs=$(python3 refresh_guard.py delay --attempt "$ATTEMPT" | sed -n 's/^seconds=//p')
+          echo "Retry attempt $ATTEMPT for: $RETRY_FOR; waiting ${secs}s"
+          sleep "$secs"
+
+      - name: Skip if the page was generated recently
+        id: guard
+        run: python3 refresh_guard.py skip --health data/health.json --event "${{ github.event_name }}" | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: dashboard-build
+      cancel-in-progress: false
     permissions:
       contents: write
+    outputs:
+      targets: ${{ steps.decide.outputs.targets }}
+      next_attempt: ${{ steps.decide.outputs.next_attempt }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Keep the health record from before this run
+        run: cp data/health.json /tmp/health_before.json || echo '{}' > /tmp/health_before.json
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,7 +80,7 @@ jobs:
 
       - name: Unit tests
         run: |
-          python -m unittest test_fast_metrics test_fred_monitor test_dash_state test_stress_calendar test_index_gex test_fragility_chain
+          python -m unittest test_fast_metrics test_fred_monitor test_dash_state test_stress_calendar test_index_gex test_fragility_chain test_refresh_guard
 
       # Degraded-source scenario: every live FRED request is forced to fail so the page is built
       # from the archived official CSVs. The artifact is only used for the test and is not committed.
@@ -60,3 +112,30 @@ jobs:
           git diff --staged --quiet || git commit -m "chore: auto-update dashboard $(date -u '+%Y-%m-%d %H:%M UTC')"
           git pull --rebase -X theirs origin main
           git push
+
+      - name: Decide whether to retry
+        id: decide
+        if: ${{ always() }}
+        env:
+          ATTEMPT: ${{ inputs.attempt || '0' }}
+          RETRY_FOR: ${{ inputs.retry_for }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python3 refresh_guard.py retry --before /tmp/health_before.json --after data/health.json \
+            --attempt "$ATTEMPT" --retry-for "$RETRY_FOR" --job-status "$JOB_STATUS" | tee -a "$GITHUB_OUTPUT"
+
+  retry:
+    needs: build
+    if: ${{ always() && needs.build.result != 'skipped' && needs.build.outputs.next_attempt != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the next attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT: ${{ needs.build.outputs.next_attempt }}
+          TARGETS: ${{ needs.build.outputs.targets }}
+        run: |
+          echo "Retrying (attempt $NEXT) for: $TARGETS"
+          gh workflow run update-dashboard.yml --repo "$GITHUB_REPOSITORY" --ref main -f attempt="$NEXT" -f retry_for="$TARGETS"

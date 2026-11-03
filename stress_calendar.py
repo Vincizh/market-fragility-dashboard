@@ -48,21 +48,70 @@ def fomc_covers(today: date, horizon_days: int = 120) -> bool:
     return max(FOMC_DECISION_DAYS) >= today + timedelta(days=horizon_days)
 
 
+TD_UPCOMING_URL = "https://www.treasurydirect.gov/TA_WS/securities/upcoming"
+
+
+def _td_security_type(r: dict[str, Any]) -> str:
+    t = str(r.get("securityType") or "")
+    if str(r.get("floatingRate")) == "Yes":
+        return "FRN"
+    if str(r.get("inflationProtected")) == "Yes" and t in ("Note", "Bond"):
+        return "TIPS " + t
+    return t
+
+
+def treasurydirect_upcoming_frame(rows: Iterable[dict[str, Any]]) -> pd.DataFrame:
+    """TreasuryDirect upcoming auctions mapped onto the FiscalData column names."""
+    out = []
+    for r in rows or []:
+        out.append({"cusip": r.get("cusip"), "security_type": _td_security_type(r), "security_term": r.get("securityTerm"),
+                    "reopening": r.get("reopening"), "auction_date": r.get("competitiveAuctionCloseDate") or r.get("auctionDate"),
+                    "issue_date": r.get("issueDate"), "announcemt_date": r.get("announcementDate"),
+                    "offering_amt": r.get("offeringAmount") or None, "source": "TreasuryDirect"})
+    return pd.DataFrame(out)
+
+
+def merge_upcoming(fiscal: pd.DataFrame | None, td: pd.DataFrame | None) -> pd.DataFrame:
+    """Union of both feeds. On the same (cusip, issue date) TreasuryDirect wins, because FiscalData's
+    upcoming_auctions table can stop updating for weeks (it froze at record date 2026-10-16)."""
+    frames = []
+    for f, src in ((td, "TreasuryDirect"), (fiscal, "FiscalData")):
+        if f is not None and not f.empty:
+            f = f.copy()
+            f["source"] = f["source"] if "source" in f else src
+            for c in ("auction_date", "issue_date", "announcemt_date"):
+                if c in f:
+                    f[c] = pd.to_datetime(f[c], errors="coerce")
+            f["offering_amt"] = pd.to_numeric(f.get("offering_amt"), errors="coerce")
+            frames.append(f)
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    df["_k"] = df["cusip"].astype(str) + "|" + df["issue_date"].astype(str)
+    df = df.drop_duplicates("_k", keep="first").drop(columns="_k")
+    return df.sort_values("auction_date").reset_index(drop=True)
+
+
 def fetch_upcoming(today: date, horizon_days: int = 120) -> pd.DataFrame:
-    """Announced Treasury auctions from FiscalData (empty frame on failure)."""
-    params = {
-        "filter": "auction_date:gte:{}".format((today - timedelta(days=3)).isoformat()),
-        "sort": "auction_date", "page[size]": "500",
-    }
-    r = fm._get(UPCOMING_URL, params=params, timeout=40)
-    df = pd.DataFrame(r.json().get("data", []))
-    if df.empty:
-        return df
-    for c in ("auction_date", "issue_date", "announcemt_date"):
-        if c in df:
-            df[c] = pd.to_datetime(df[c], errors="coerce")
-    df["offering_amt"] = pd.to_numeric(df.get("offering_amt"), errors="coerce")
-    return df
+    """Announced Treasury auctions from TreasuryDirect and FiscalData (empty frame when both fail)."""
+    fiscal = td = None
+    errors = []
+    try:
+        params = {"filter": "auction_date:gte:{}".format((today - timedelta(days=3)).isoformat()),
+                  "sort": "auction_date", "page[size]": "500"}
+        fiscal = pd.DataFrame(fm._get(UPCOMING_URL, params=params, timeout=40).json().get("data", []))
+    except Exception as exc:  # noqa: BLE001
+        errors.append("FiscalData: " + str(exc)[:80])
+    try:
+        td = treasurydirect_upcoming_frame(fm._get(TD_UPCOMING_URL, params={"format": "json"}, timeout=40).json())
+    except Exception as exc:  # noqa: BLE001
+        errors.append("TreasuryDirect: " + str(exc)[:80])
+    df = merge_upcoming(fiscal, td)
+    if df.empty and errors:
+        raise RuntimeError("; ".join(errors))
+    if not df.empty:
+        df = df[df["auction_date"].isna() | (df["auction_date"] >= pd.Timestamp(today - timedelta(days=3)))]
+    return df.reset_index(drop=True)
 
 
 def coupon_settlements(upcoming: pd.DataFrame, start: date, end: date) -> list[dict[str, Any]]:

@@ -27,7 +27,7 @@ import re
 import sys
 import time
 from math import log, sqrt, exp, pi
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import fast_metrics as fm
 import fred_catalog
@@ -1056,7 +1056,9 @@ if not stress_calendar.fomc_covers(_cal_today):
     print("WARNING: FOMC list ends before the 120-day calendar window; extend stress_calendar.FOMC_DECISION_DAYS")
 health.register("Treasury upcoming auctions", "FiscalData upcoming_auctions",
                 _cal_today.isoformat() if (_cal_upcoming is not None and len(_cal_upcoming)) else None, "weekly announcements",
-                "current" if (_cal_upcoming is not None and len(_cal_upcoming)) else "failed")
+                "current" if (_cal_upcoming is not None and len(_cal_upcoming)) else "failed",
+                note=(", ".join(sorted(set(_cal_upcoming["source"].dropna()))) if (_cal_upcoming is not None and len(_cal_upcoming)
+                      and "source" in _cal_upcoming) else (_cal_auction_err or "")))
 
 # --- Prior page (read for the embedded SPY/QQQ GEX snapshot history) --------
 try:
@@ -1525,9 +1527,12 @@ cot_ctx_html = "".join(_cot_card(cot_markets[k]) for k, *_ in cot_ctx_list if k 
 # COT freshness banner
 if cot_report_date:
     fresh_cls = "cot-stale" if cot_stale else "cot-fresh"
-    fresh_txt = ("as of " + cot_report_date
-                 + (" — STALE (" + str(age_days) + "d, holiday delay?)" if cot_stale
-                    else " — " + (str(age_days) + "d old" if age_days is not None else "")))
+    _cot_d = datetime.strptime(cot_report_date, "%Y-%m-%d").date()
+    _cot_rel, _cot_next = _cot_d + timedelta(days=3), _cot_d + timedelta(days=10)
+    fresh_txt = ("positions as of Tue " + cot_report_date
+                 + (" · STALE: the report due Fri {} has not appeared ({}d old)".format(_cot_next.isoformat(), age_days) if cot_stale
+                    else " · latest CFTC weekly report, released Fri {}; next release Fri {} after 15:30 ET ({}d old is normal for this cadence)".format(
+                        _cot_rel.isoformat(), _cot_next.isoformat(), age_days)))
 else:
     fresh_cls, fresh_txt = "cot-stale", "COT unavailable"
 

@@ -78,7 +78,7 @@ A stage is confirmed when two or more indicators are on, partial when one is on,
 
 Chain level: stage 1 confirmed gives watch; stage 2, 3 or 4 confirmed gives elevated; two or more of stages 2 to 4 confirmed gives stress. A confirmed backdrop raises the level by one step only while the level is below elevated. The stance sentence in the key takeaway comes from the chain level. The weekly LPI is shown as backdrop and no longer sets the stance.
 
-Every hourly production run compares the chain with the last stored run in `data/chain-state.json` and appends an event when the chain level, a stage status or the FSI band changes. An unavailable reading never creates an event and does not overwrite the last known value, so a data outage is not shown as relief.
+Every production run compares the chain with the last stored run in `data/chain-state.json` and appends an event when the chain level, a stage status or the FSI band changes. An unavailable reading never creates an event and does not overwrite the last known value, so a data outage is not shown as relief.
 
 ## Funding Stress Index (v4)
 

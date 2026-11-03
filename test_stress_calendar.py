@@ -54,3 +54,27 @@ class StressCalendarTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UpcomingMerge(unittest.TestCase):
+    def test_treasurydirect_fills_and_wins(self):
+        import pandas as pd
+        import stress_calendar as sc
+        fiscal = pd.DataFrame({"cusip": ["A"], "security_type": ["Note"], "security_term": ["2-Year"],
+                               "auction_date": ["2026-10-28"], "issue_date": ["2026-11-02"], "offering_amt": ["69000000000"]})
+        td = sc.treasurydirect_upcoming_frame([
+            {"cusip": "A", "securityType": "Note", "securityTerm": "2-Year", "competitiveAuctionCloseDate": "2026-10-28T00:00:00",
+             "issueDate": "2026-11-02T00:00:00", "offeringAmount": "70000000000", "floatingRate": "No", "inflationProtected": "No"},
+            {"cusip": "B", "securityType": "Note", "securityTerm": "2-Year", "competitiveAuctionCloseDate": "2026-10-29T00:00:00",
+             "issueDate": "2026-10-31T00:00:00", "floatingRate": "Yes", "inflationProtected": "No"},
+            {"cusip": "C", "securityType": "Note", "securityTerm": "10-Year", "competitiveAuctionCloseDate": "2026-11-19T00:00:00",
+             "issueDate": "2026-11-30T00:00:00", "floatingRate": "No", "inflationProtected": "Yes"}])
+        m = sc.merge_upcoming(fiscal, td)
+        self.assertEqual(len(m), 3)
+        self.assertEqual(float(m.loc[m["cusip"] == "A", "offering_amt"].iloc[0]), 70e9)
+        self.assertEqual(m.loc[m["cusip"] == "B", "security_type"].iloc[0], "FRN")
+        self.assertEqual(m.loc[m["cusip"] == "C", "security_type"].iloc[0], "TIPS Note")
+
+    def test_both_empty(self):
+        import stress_calendar as sc
+        self.assertTrue(sc.merge_upcoming(None, None).empty)

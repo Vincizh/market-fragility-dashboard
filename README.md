@@ -11,7 +11,7 @@ The overview shows a five-stage fragility chain, a daily Funding Stress Index, a
 
 **Live dashboard:** <https://vincizh.github.io/market-fragility-dashboard/>
 
-The dashboard is deterministic and refreshes hourly through GitHub Actions. A missing upstream source degrades only that module; stale or date-misaligned data is shown in gray and is never rendered as a current value.
+The dashboard is deterministic and refreshes about twice an hour through GitHub Actions, with automatic retries. A missing upstream source degrades only that module; stale or date-misaligned data is shown in gray and is never rendered as a current value.
 
 ## Current modules
 
@@ -146,7 +146,9 @@ MFD_FORCE_FRED_CACHE=1 MFD_OUTPUT=index-degraded.html python generate_dashboard.
 node test_dashboard_fred_cache.mjs index-degraded.html
 ```
 
-GitHub Actions runs hourly with a 20-minute timeout. It runs the unit tests, the FRED-cache scenario, the main generation and the browser checks, then commits `index.html`, the daily SPY concentration snapshots, the FRED archive and `data/health.json` when data changes. `index-degraded.html` is never committed. Do not commit a locally generated `index.html`: it carries the embedded GEX and dashboard-state history that the hosted page accumulates.
+GitHub Actions is scheduled three times an hour (minutes 7, 27 and 47) because GitHub drops many scheduled runs under load; in late October 2026 only about 6 of 24 hourly runs fired per day. `refresh_guard.py` skips a scheduled run when the page was generated less than 25 minutes ago, so in practice the page refreshes about twice an hour. Each run executes the unit tests, the FRED-cache scenario, the main generation and the browser checks, then commits `index.html`, the daily SPY concentration snapshots, the FRED archive, `data/health.json` and `data/chain-state.json`. `index-degraded.html` is never committed. Do not commit a locally generated `index.html`: it carries the embedded GEX and dashboard-state history that the hosted page accumulates.
+
+Retries work at two levels. Each HTTP request is retried up to four times with 2, 4 and 8 second waits (client errors other than 408 and 429 are not retried). After a run, `refresh_guard.py retry` lists sources that were current before the run and are now failed or served from cache; if the list is not empty, or the job itself failed, the workflow dispatches itself again after 5, 15 and then 30 minutes, at most three times. A retry run only follows the sources it was asked about, and a source that has been down for days does not start new retries every hour. Sources that are late at the publisher (status stale, for example a weekly series that has not been posted) are not retried, because a new request cannot make them newer.
 
 ## Methodology
 

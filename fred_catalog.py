@@ -103,7 +103,7 @@ CATALOG: tuple[FredSpec, ...] = (
     _s("T10Y3M", "10-year minus 3-month Treasury spread", "3m10y 利差", "rates", "percent", "bp", 100.0, DAILY, 5, "2010-01-01"),
     _s("DFII10", "10-year TIPS real yield", "10年期实际利率", "rates", "percent", "pct", 1.0, DAILY, 5, "2010-01-01", "state"),
     _s("T10YIE", "10-year breakeven inflation", "10年期盈亏平衡通胀", "rates", "percent", "pct", 1.0, DAILY, 5, "2010-01-01"),
-    _s("THREEFYTP10", "Kim-Wright 10-year term premium (model estimate)", "Kim-Wright 10年期期限溢价(模型估计)", "rates", "percent", "pct", 1.0, DAILY, 7, "2010-01-01", "state"),
+    _s("THREEFYTP10", "Kim-Wright 10-year term premium (model estimate)", "Kim-Wright 10年期期限溢价(模型估计)", "rates", "percent", "pct", 1.0, DAILY, 14, "2010-01-01", "state"),   # Fed Board posts it weekly with about a one-week lag
     _s("TASACBW027SBOG", "Commercial banks: Treasury and agency securities", "商业银行持有国债和机构债", "rates", "billions", "$B", 1.0, WEEKLY_H8, 14, "2018-01-01"),
     _s("DTWEXBGS", "Nominal broad US dollar index", "广义美元指数", "rates", "index", "index", 1.0, DAILY, 8, "2018-01-01"),
     # ---- Volatility fallback ---------------------------------------------------------

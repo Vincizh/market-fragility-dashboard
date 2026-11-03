@@ -105,7 +105,7 @@ def freshness(observation_date: date | datetime | str | None, cadence: str,
 
 
 def _get(url: str, *, params: dict[str, Any] | None = None, timeout: int = 40,
-         retries: int = 3, session: requests.Session | None = None,
+         retries: int = 4, session: requests.Session | None = None,
          headers: dict[str, str] | None = None) -> requests.Response:
     """GET with retries. headers=None sends the project UA; headers={} sends no custom
     headers (FRED fredgraph stalls on custom or browser User-Agents, so FRED calls use {})."""
@@ -120,8 +120,11 @@ def _get(url: str, *, params: dict[str, Any] | None = None, timeout: int = 40,
             return response
         except requests.RequestException as exc:
             last = exc
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            if code is not None and 400 <= code < 500 and code not in (408, 429):
+                break                       # a client error will not fix itself on retry
             if attempt < retries - 1:
-                time.sleep(0.4 * (attempt + 1))
+                time.sleep(min(2.0 * 2 ** attempt, 15.0))   # 2 s, 4 s, 8 s
     raise RuntimeError(f"request failed for {url}: {last}")
 
 
