@@ -1,11 +1,11 @@
 {
  "v": 1,
  "current": {
-  "when": "2026-11-04T16:14Z",
-  "level": "elevated",
+  "when": "2026-11-04T22:05Z",
+  "level": "watch",
   "stages": {
    "backdrop": "confirmed",
-   "repo": "confirmed",
+   "repo": "partial",
    "reserves": "partial",
    "transmission": "partial",
    "amplification": "partial"
@@ -74,6 +74,22 @@
    "when": "2026-11-04T00:37Z",
    "kind": "stage",
    "key": "transmission",
+   "from": "confirmed",
+   "to": "partial",
+   "worse": false
+  },
+  {
+   "when": "2026-11-04T22:05Z",
+   "kind": "level",
+   "key": "level",
+   "from": "elevated",
+   "to": "watch",
+   "worse": false
+  },
+  {
+   "when": "2026-11-04T22:05Z",
+   "kind": "stage",
+   "key": "repo",
    "from": "confirmed",
    "to": "partial",
    "worse": false
