@@ -1,16 +1,16 @@
 {
  "v": 1,
  "current": {
-  "when": "2026-11-08T17:10Z",
-  "level": "elevated",
+  "when": "2026-11-11T00:12Z",
+  "level": "watch",
   "stages": {
    "backdrop": "confirmed",
-   "repo": "confirmed",
+   "repo": "partial",
    "reserves": "quiet",
    "transmission": "quiet",
-   "amplification": "confirmed"
+   "amplification": "partial"
   },
-  "fsi": 64.4,
+  "fsi": 63.2,
   "fsi_state": "watch"
  },
  "events": [
@@ -157,6 +157,30 @@
    "from": "partial",
    "to": "confirmed",
    "worse": true
+  },
+  {
+   "when": "2026-11-11T00:12Z",
+   "kind": "level",
+   "key": "level",
+   "from": "elevated",
+   "to": "watch",
+   "worse": false
+  },
+  {
+   "when": "2026-11-11T00:12Z",
+   "kind": "stage",
+   "key": "repo",
+   "from": "confirmed",
+   "to": "partial",
+   "worse": false
+  },
+  {
+   "when": "2026-11-11T00:12Z",
+   "kind": "stage",
+   "key": "amplification",
+   "from": "confirmed",
+   "to": "partial",
+   "worse": false
   }
  ],
  "started": "2026-11-01T12:27Z"
