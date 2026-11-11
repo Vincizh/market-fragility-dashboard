@@ -21,7 +21,7 @@ on:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     outputs:
       skip: ${{ steps.guard.outputs.skip }}
@@ -51,7 +51,7 @@ jobs:
   build:
     needs: prepare
     if: ${{ needs.prepare.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     concurrency:
       group: dashboard-build
@@ -127,7 +127,7 @@ jobs:
   retry:
     needs: build
     if: ${{ always() && needs.build.result != 'skipped' && needs.build.outputs.next_attempt != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: write
     steps:
