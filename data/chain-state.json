@@ -1,7 +1,7 @@
 {
  "v": 1,
  "current": {
-  "when": "2026-11-17T04:40Z",
+  "when": "2026-11-17T13:14Z",
   "level": "watch",
   "stages": {
    "backdrop": "confirmed",
@@ -10,7 +10,7 @@
    "transmission": "quiet",
    "amplification": "partial"
   },
-  "fsi": 60.4,
+  "fsi": 61.6,
   "fsi_state": "watch"
  },
  "events": [
