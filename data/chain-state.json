@@ -1,13 +1,13 @@
 {
  "v": 1,
  "current": {
-  "when": "2026-11-18T14:24Z",
+  "when": "2026-11-18T21:42Z",
   "level": "elevated",
   "stages": {
    "backdrop": "confirmed",
    "repo": "partial",
    "reserves": "quiet",
-   "transmission": "quiet",
+   "transmission": "partial",
    "amplification": "confirmed"
   },
   "fsi": 58.8,
@@ -237,6 +237,14 @@
    "from": "watch",
    "to": "normal",
    "worse": false
+  },
+  {
+   "when": "2026-11-18T21:42Z",
+   "kind": "stage",
+   "key": "transmission",
+   "from": "quiet",
+   "to": "partial",
+   "worse": true
   }
  ],
  "started": "2026-11-01T12:27Z"
