@@ -1,7 +1,7 @@
 {
  "v": 1,
  "current": {
-  "when": "2026-11-23T09:20Z",
+  "when": "2026-11-23T15:04Z",
   "level": "elevated",
   "stages": {
    "backdrop": "confirmed",
@@ -10,8 +10,8 @@
    "transmission": "quiet",
    "amplification": "confirmed"
   },
-  "fsi": 60.0,
-  "fsi_state": "normal"
+  "fsi": 60.4,
+  "fsi_state": "watch"
  },
  "events": [
   {
@@ -253,6 +253,14 @@
    "from": "partial",
    "to": "quiet",
    "worse": false
+  },
+  {
+   "when": "2026-11-23T15:04Z",
+   "kind": "fsi",
+   "key": "fsi",
+   "from": "normal",
+   "to": "watch",
+   "worse": true
   }
  ],
  "started": "2026-11-01T12:27Z"
