@@ -1,12 +1,12 @@
 {
  "v": 1,
  "current": {
-  "when": "2026-11-27T18:56Z",
+  "when": "2026-11-27T22:11Z",
   "level": "stress",
   "stages": {
    "backdrop": "confirmed",
    "repo": "partial",
-   "reserves": "quiet",
+   "reserves": "confirmed",
    "transmission": "confirmed",
    "amplification": "confirmed"
   },
@@ -339,6 +339,14 @@
    "kind": "stage",
    "key": "amplification",
    "from": "partial",
+   "to": "confirmed",
+   "worse": true
+  },
+  {
+   "when": "2026-11-27T22:11Z",
+   "kind": "stage",
+   "key": "reserves",
+   "from": "quiet",
    "to": "confirmed",
    "worse": true
   }
